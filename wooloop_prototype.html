@@ -309,6 +309,8 @@
 <script src="https://cdn.jsdelivr.net/npm/pixi.js@7.4.0/dist/pixi.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.137.5/build/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.137.5/examples/js/loaders/GLTFLoader.js"></script>
+<!-- DRACOLoader: required for Draco-compressed GLBs (e.g. model_optimized.glb). -->
+<script src="https://cdn.jsdelivr.net/npm/three@0.137.5/examples/js/loaders/DRACOLoader.js"></script>
 </head>
 <body>
 <div id="overlay"><div class="banner" id="banner"></div></div>
@@ -1521,48 +1523,65 @@ function drawReferenceTrayPlate(g, w, h, alpha = 1) {
 }
 
 function createReferenceTrayPlate() {
+  // Returns a Container holding a Sprite of the upright tray texture
+  // (pre-rendered from model_optimized.glb). Falls back to a flat plate
+  // graphic when the texture isn't loaded yet.
+  // Sized to Layout.bobbinSize — the caller (Carrier.updateVisualStyle)
+  // multiplies by EditorTune.trayIdleScale via container.scale.
   const node = new PIXI.Container();
-  const g = new PIXI.Graphics();
-  const w = Layout.bobbinSize * 1.52;
-  const h = Layout.bobbinSize * 0.72;
-  drawReferenceTrayPlate(g, w, h, 1);
-  node.addChild(g);
+  const tex = Game.tex?.trayUpright || Game.tex?.tray;
+  if (tex) {
+    const sp = new PIXI.Sprite(tex);
+    sp.anchor.set(0.5);
+    sp.width = sp.height = Layout.bobbinSize;
+    node.addChild(sp);
+  } else {
+    const g = new PIXI.Graphics();
+    const w = Layout.bobbinSize * 1.52;
+    const h = Layout.bobbinSize * 0.72;
+    drawReferenceTrayPlate(g, w, h, 1);
+    node.addChild(g);
+  }
   return node;
 }
 
 function drawReferenceTrayStack(container, count) {
   if (!EditorTune.trayDumpVisible || count <= 0) return;
+  const tex = Game.tex?.trayUpright || Game.tex?.tray;
   const s = Layout.bobbinSize * EditorTune.trayIdleScale;
-  const w = s * 1.52;
-  const h = s * 0.72;
   const stack = new PIXI.Container();
   stack.rotation = deg2rad(EditorTune.trayDumpRotationDeg || 0);
 
+  // Soft ground shadow under the whole stack.
   const shadow = new PIXI.Graphics();
   shadow.beginFill(0x000000, 0.26);
-  shadow.drawEllipse(-w * 0.10, h * 0.50, w * 0.58, h * 0.30);
+  shadow.drawEllipse(0, s * 0.55, s * 0.62, s * 0.18);
   shadow.endFill();
   stack.addChild(shadow);
 
+  // Vertical card-stack: backmost first so the foreground tray (i = 0) sits
+  // on top. Offsets are in pixel multiples of the sprite size so the stack
+  // scales with Layout.bobbinSize / EditorTune.trayIdleScale.
   const visible = Math.max(0, Math.min(GameTune.carrier.total, count));
   for (let i = visible - 1; i >= 0; i--) {
-    const plate = new PIXI.Graphics();
-    const fade = 1 - i * 0.055;
-    drawReferenceTrayPlate(plate, w, h, fade);
-    plate.x = -i * s * 0.115;
-    plate.y = -i * s * 0.020;
-    stack.addChild(plate);
+    const off = i * s * 0.18;
+    if (tex) {
+      const sp = new PIXI.Sprite(tex);
+      sp.anchor.set(0.5);
+      sp.width = sp.height = s;
+      sp.x = -off * 0.15;
+      sp.y = -off;
+      stack.addChild(sp);
+    } else {
+      // Procedural fallback (pre-load or asset failure).
+      const w = s * 1.52, h = s * 0.72;
+      const plate = new PIXI.Graphics();
+      drawReferenceTrayPlate(plate, w, h, 1 - i * 0.055);
+      plate.x = -off * 0.15;
+      plate.y = -off;
+      stack.addChild(plate);
+    }
   }
-
-  // Tiny blue lip from the holder, so the stack reads as inserted into the dock.
-  const lip = new PIXI.Graphics();
-  lip.beginFill(0x0f5ed9, 0.98);
-  lip.drawRoundedRect(-w * 0.58, -h * 0.56, w * 0.14, h * 1.12, h * 0.09);
-  lip.endFill();
-  lip.beginFill(0x4aa5ff, 0.45);
-  lip.drawRoundedRect(-w * 0.54, -h * 0.50, w * 0.035, h * 1.00, h * 0.04);
-  lip.endFill();
-  stack.addChild(lip);
 
   container.addChild(stack);
 }
@@ -1577,7 +1596,8 @@ class Carrier {
       this.upright = createReferenceTrayPlate();
       this.lying = new PIXI.Sprite(texL || texU);
       this.lying.anchor.set(0.5);
-      this.lying.tint = COLOR.trayTint;
+      // No PIXI tint: model_optimized.glb has its own painted colors.
+      this.lying.tint = 0xffffff;
       this.updateVisualStyle();
       this.upright.alpha = orientation === 'upright' ? 1 : 0;
       this.lying.alpha = orientation === 'lying' ? 1 : 0;
@@ -1753,12 +1773,19 @@ async function preRender3DAssets() {
     });
   };
 
-  // Override source materials. Bobbins stay white and are Pixi-tinted per color;
-  // tray gets its reference-like pale metal color directly in the 3D pass.
+  // Override source materials.
+  //  - Bobbins stay white so PIXI can tint them per color.
+  //  - Tray: KEEP the GLB's authored material if it has a baked texture map
+  //    (so model_optimized.glb's hand-painted look shows). Otherwise apply
+  //    the generic pale-metal tint used for the legacy untextured tray model.
   const applyAssetMaterial = (root, kind = 'bobbin') => {
     root.traverse(c => {
       if (c.isMesh) {
-        c.material = makeMaterial(kind);
+        if (kind === 'tray' && c.material && c.material.map) {
+          // Preserve textured material as-is.
+        } else {
+          c.material = makeMaterial(kind);
+        }
         c.castShadow = false;
         c.receiveShadow = false;
       }
@@ -1766,9 +1793,16 @@ async function preRender3DAssets() {
   };
 
   const loader = new THREE.GLTFLoader();
+  // Wire DRACO decoder (CDN, matches three@0.137.5). Required for the
+  // user-supplied Draco-compressed tray model.
+  if (typeof THREE.DRACOLoader !== 'undefined') {
+    const dracoLoader = new THREE.DRACOLoader();
+    dracoLoader.setDecoderPath('https://cdn.jsdelivr.net/npm/three@0.137.5/examples/js/libs/draco/');
+    loader.setDRACOLoader(dracoLoader);
+  }
   const [bobbinGLB, trayGLB] = await Promise.all([
     loader.loadAsync('3D_asset/bobin.glb'),
-    loader.loadAsync('3D_asset/bobin_tray.glb'),
+    loader.loadAsync('3D_asset/model_optimized.glb'),
   ]);
 
   const captureToPixiTex = async (camera) => {
@@ -1916,8 +1950,10 @@ async function preRender3DAssets() {
     clearAddedMeshes();
     const trayGroup = new THREE.Group();
     if (orientation === 'upright') {
-      // Rotate plate 90° around its own Y so we see the edge → tall card silhouette.
-      trayGroup.rotation.y = deg2rad((yDeg || 0) + 90);
+      // model_optimized.glb is already authored as a tall, vertical tray
+      // (white grip pad on top, blue body below). Use yDeg as-is so the
+      // editor controls direct Y rotation without an implicit +90° offset.
+      trayGroup.rotation.y = deg2rad(yDeg || 0);
       trayGroup.rotation.x = deg2rad(EditorTune.trayIdleXRotationDeg || 0);
     } else {
       const tilt = (tiltDeg !== undefined ? tiltDeg : EditorTune.trayTiltDeg);
