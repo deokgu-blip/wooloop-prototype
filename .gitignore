@@ -1,0 +1,25 @@
+# OS metadata
+.DS_Store
+Thumbs.db
+
+# Editor/IDE caches that don't belong on git
+.idea/
+*.swp
+*.swo
+
+# Claude Code per-machine state (permissions, etc.)
+.claude/settings.local.json
+
+# Local prototype generated artefacts — not source. Big (multi-GB) and
+# regenerated on demand. Keep them out of the repo so cloning stays fast.
+frames/
+frames_full/
+output/
+_analysis/
+
+# Node / package manager (defensive — no node deps today)
+node_modules/
+
+# Local server logs / temp
+*.log
+*.tmp

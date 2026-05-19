@@ -1,0 +1,5078 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Wooloop Prototype</title>
+<style>
+  :root {
+    --safe-top: env(safe-area-inset-top, 0px);
+    --safe-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%; overflow: hidden;
+    background: #6db4d6;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: none;
+  }
+  canvas { display: block; }
+  #overlay {
+    position: fixed; inset: 0;
+    pointer-events: none;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  #overlay .banner {
+    background: rgba(0,0,0,0.55);
+    color: #fff;
+    padding: 16px 28px;
+    border-radius: 14px;
+    font-size: 22px;
+    letter-spacing: 1px;
+    opacity: 0;
+    transition: opacity .3s;
+  }
+  #overlay.show .banner { opacity: 1; }
+
+  /* ============= Unity-style Editor ============= */
+  /* Editor-only scene overlay: dim the running game and overlay a faint
+     grid so the canvas feels like a Unity scene view rather than a paused
+     game. pointer-events:none so canvas clicks still reach the gizmo. */
+  #editor-scene-overlay {
+    position: fixed; inset: 0; z-index: 500;
+    pointer-events: none; display: none;
+    background-color: rgba(15, 22, 30, 0.22);
+    background-image:
+      linear-gradient(rgba(255,255,255,0.06) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.06) 1px, transparent 1px);
+    background-size: 32px 32px;
+  }
+  body.editor-mode #editor-scene-overlay { display: block; }
+  /* Watermark text top-center */
+  body.editor-mode::after {
+    content: '에디터 모드 · 게임 정지';
+    position: fixed; top: 14px; left: 50%; transform: translateX(-50%);
+    z-index: 1001; pointer-events: none;
+    background: rgba(20,30,40,0.85);
+    color: #82c8ff; font-size: 11px; font-weight: 700;
+    letter-spacing: 0.5px;
+    padding: 5px 12px; border-radius: 14px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+  }
+
+  /* Mode dropdown — always visible at top-left */
+  #editor-mode-bar {
+    position: fixed; top: 8px; left: 8px; z-index: 1001;
+    display: flex; gap: 6px; align-items: center;
+  }
+  #editor-mode-bar select {
+    background: rgba(20,30,40,0.92); color: #fff;
+    border: 1px solid #4a5560; border-radius: 6px;
+    padding: 6px 10px; font-size: 12.5px; font-weight: 700;
+    cursor: pointer; min-width: 110px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.35);
+  }
+  #editor-mode-bar select:focus { outline: 1px solid #4a7ec0; }
+
+  /* Left sidebar — visible only in edit mode */
+  #editor-shell { display: none; }
+  body.editor-mode #editor-shell { display: block; }
+  #editor-shell .left-panel {
+    position: fixed; top: 48px; left: 8px; z-index: 1000;
+    width: 230px; max-height: calc(100vh - 60px);
+    background: rgba(20,30,40,0.96); color: #fff;
+    border-radius: 8px; padding: 10px 10px 8px;
+    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+    font-size: 12px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+    display: flex; flex-direction: column; gap: 8px;
+    overflow: hidden;
+  }
+  #editor-shell .left-panel h4 {
+    margin: 0; font-size: 11px; color: #82c8ff;
+    text-transform: uppercase; letter-spacing: 0.5px;
+  }
+  #asset-list {
+    list-style: none; margin: 0; padding: 0;
+    overflow-y: auto; max-height: 32vh;
+    border: 1px solid #2a3540; border-radius: 5px;
+    background: #161c22;
+  }
+  #asset-list li {
+    padding: 7px 10px; font-size: 12px;
+    border-bottom: 1px solid #232c36;
+    cursor: pointer;
+  }
+  #asset-list li:last-child { border-bottom: none; }
+  #asset-list li:hover { background: #1f2832; }
+  #asset-list li.selected {
+    background: #2c5d96; color: #fff;
+  }
+  #asset-list li .tag {
+    float: right; font-size: 10px; color: #889;
+    background: #2a323a; padding: 1px 5px; border-radius: 8px;
+  }
+  #asset-list li.selected .tag { background: rgba(255,255,255,0.18); color:#dfe; }
+
+  /* Gizmo mode bar */
+  .gizmo-bar {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px;
+  }
+  .gizmo-bar.four { grid-template-columns: repeat(4, 1fr); }
+  .gizmo-bar button {
+    background: #2a323a; color: #ddd; border: 1px solid #3a4a5a;
+    border-radius: 5px; padding: 7px 4px; font-size: 11px;
+    cursor: pointer;
+  }
+  .gizmo-bar button.active {
+    background: #4a7ec0; color: #fff; border-color: #82c8ff;
+  }
+  .gizmo-bar button:hover:not(.active) { background: #303a44; }
+  .gizmo-bar .kb { color: #aac; font-size: 9px; margin-left: 3px; }
+
+  /* Inspector */
+  #inspector {
+    border: 1px solid #2a3540; border-radius: 5px;
+    background: #161c22; padding: 8px 8px 10px;
+    overflow-y: auto; max-height: 38vh; flex: 1;
+  }
+  #inspector .empty { color: #677; font-size: 11px; text-align: center; padding: 14px 0; }
+  #inspector .field-group {
+    margin: 8px 0 6px;
+  }
+  #inspector .field-group:first-child { margin-top: 0; }
+  #inspector .field-title {
+    font-size: 10px; color: #82c8ff; font-weight: 700;
+    margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.4px;
+  }
+  #inspector .field-row {
+    display: grid; grid-template-columns: 16px 1fr; gap: 5px;
+    align-items: center; margin: 3px 0;
+  }
+  #inspector .field-row .axis {
+    text-align: center; font-size: 10.5px; font-weight: 700;
+  }
+  #inspector .field-row .axis.x { color: #f87a7a; }
+  #inspector .field-row .axis.y { color: #7aff8a; }
+  #inspector .field-row .axis.z { color: #7aa8ff; }
+  #inspector .field-row input[type="number"] {
+    width: 100%; background: #20272f; color: #fff;
+    border: 1px solid #2a3540; border-radius: 4px;
+    padding: 3px 5px; font-size: 11px;
+    font-variant-numeric: tabular-nums;
+  }
+  #inspector .field-row input[type="number"]:focus {
+    outline: 1px solid #4a7ec0;
+  }
+  #inspector .field-row input[type="number"].disabled {
+    color: #556; background: #181d22;
+  }
+  #inspector .hint {
+    font-size: 10.5px; color: #889; margin-top: 6px; line-height: 1.4;
+  }
+
+  /* Bottom actions */
+  .editor-actions {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 5px;
+  }
+  .editor-actions button {
+    background: #4a7ec0; color: #fff; border: none;
+    border-radius: 5px; padding: 8px 6px; font-size: 11.5px;
+    cursor: pointer; font-weight: 600;
+  }
+  .editor-actions button.secondary { background: #404a55; }
+  .editor-actions button:hover { filter: brightness(1.15); }
+  .editor-actions button.full-width { grid-column: span 2; }
+
+  /* Tool/map panel — right side */
+  #tool-shell { display: none; }
+  body.editor-mode #tool-shell { display: block; }
+  #tool-shell .right-panel {
+    position: fixed; top: 48px; right: 8px; z-index: 1000;
+    width: 280px; max-height: calc(100vh - 60px);
+    background: rgba(20,30,40,0.96); color: #fff;
+    border-radius: 8px; padding: 10px;
+    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+    font-size: 12px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+    display: flex; flex-direction: column; gap: 8px;
+    overflow-y: auto;
+  }
+  #tool-shell.collapsed .right-panel { display: none; }
+  #tool-shell .tool-tab-bar {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 4px;
+  }
+  #tool-shell .tool-tab-bar button {
+    background: #2a323a; color: #ddd; border: 1px solid #3a4a5a;
+    border-radius: 5px; padding: 6px 4px; font-size: 11px; cursor: pointer;
+  }
+  #tool-shell .tool-tab-bar button.active {
+    background: #4a7ec0; color: #fff; border-color: #82c8ff;
+  }
+  #tool-shell .tool-section[hidden] { display: none; }
+  #tool-shell h4 {
+    margin: 4px 0 4px; font-size: 11px; color: #82c8ff;
+    text-transform: uppercase; letter-spacing: 0.5px;
+  }
+  #tool-shell .row {
+    display: flex; align-items: center; gap: 6px; margin: 4px 0;
+  }
+  #tool-shell .row label { flex: 0 0 90px; font-size: 10.5px; color: #bcd; }
+  #tool-shell .row input[type="range"] { flex: 1; min-width: 0; }
+  #tool-shell .row .val {
+    flex: 0 0 40px; font-size: 10.5px; text-align: right; color: #fff;
+    font-variant-numeric: tabular-nums;
+  }
+  #tool-shell button {
+    background: #4a7ec0; color: #fff; border: none;
+    border-radius: 5px; padding: 7px 10px; font-size: 11.5px;
+    cursor: pointer;
+  }
+  #tool-shell button.secondary { background: #404a55; }
+
+  /* Drop zone (resource upload) */
+  #tool-shell .drop-zone {
+    border: 2px dashed #4a5560; border-radius: 6px;
+    padding: 14px 8px; margin: 6px 0;
+    text-align: center; font-size: 11.5px; color: #bcd;
+    background: #1f262d; cursor: pointer;
+    transition: background 0.12s, border-color 0.12s;
+  }
+  #tool-shell .drop-zone:hover { border-color: #4a7ec0; background: #242c34; }
+  #tool-shell .drop-zone.dragover { border-color: #82c8ff; background: #2c3744; color: #fff; }
+  #tool-shell .drop-zone .hint { display: block; margin-top: 4px; font-size: 10px; color: #889; }
+  #tool-shell select.target-select {
+    width: 100%; background: #2a323a; color: #fff;
+    border: 1px solid #4a5560; border-radius: 5px;
+    padding: 5px 8px; font-size: 11.5px; margin: 4px 0;
+  }
+  #tool-shell .upload-result {
+    font-size: 10.5px; color: #9c9; margin-top: 4px;
+    font-family: ui-monospace, monospace;
+  }
+
+  /* Map tool */
+  #map-canvas {
+    display: block; margin: 6px auto;
+    cursor: crosshair; background: #0d1116;
+    border: 1px solid #2a323a; border-radius: 4px;
+    image-rendering: pixelated;
+    touch-action: none;
+  }
+  #map-palette {
+    display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px;
+    margin: 6px 0;
+  }
+  #map-palette button {
+    aspect-ratio: 1; padding: 0; background: #2a323a;
+    border: 2px solid transparent; border-radius: 4px;
+    cursor: pointer; min-height: 28px;
+  }
+  #map-palette button.selected { border-color: #fff; }
+  #map-palette button .swatch {
+    display: block; width: 100%; height: 100%; border-radius: 2px;
+  }
+  #bobbin-preview {
+    font-size: 11px; color: #cde;
+    display: flex; flex-direction: column; gap: 3px;
+    max-height: 140px; overflow-y: auto;
+  }
+  #bobbin-preview .chip {
+    display: flex; align-items: center; gap: 6px;
+    padding: 3px 6px; background: #1f262d; border-radius: 4px;
+  }
+  #bobbin-preview .chip .sw {
+    width: 14px; height: 14px; border-radius: 3px;
+    border: 1px solid rgba(255,255,255,0.2);
+  }
+  #bobbin-preview em { color: #889; font-size: 10.5px; }
+  #tool-shell .toolbar-actions {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 6px;
+    margin: 8px 0;
+  }
+  #tool-shell .toolbar-actions button { padding: 7px 8px; font-size: 11.5px; }
+  #tool-shell fieldset {
+    border: 1px solid #3a4a5a; border-radius: 6px;
+    margin: 4px 0; padding: 6px 8px 8px;
+  }
+  #tool-shell legend {
+    padding: 0 5px; color: #82c8ff;
+    font-size: 10.5px; font-weight: 700;
+  }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/pixi.js@7.4.0/dist/pixi.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.137.5/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.137.5/examples/js/loaders/GLTFLoader.js"></script>
+</head>
+<body>
+<div id="overlay"><div class="banner" id="banner"></div></div>
+<div id="editor-scene-overlay"></div>
+
+<!-- ===== Mode dropdown (top-left, always visible) ===== -->
+<div id="editor-mode-bar">
+  <select id="app-mode-select" title="모드 전환">
+    <option value="play">▶ 플레이</option>
+    <option value="edit">✎ 에디터</option>
+  </select>
+</div>
+
+<!-- ===== Left panel: asset list + gizmo + inspector + save (edit mode only) ===== -->
+<div id="editor-shell">
+  <div class="left-panel">
+    <h4>에셋</h4>
+    <ul id="asset-list"></ul>
+
+    <h4>도구</h4>
+    <div class="gizmo-bar four">
+      <button data-gizmo="select" class="active">선택<span class="kb">Q</span></button>
+      <button data-gizmo="translate">이동<span class="kb">W</span></button>
+      <button data-gizmo="scale">크기<span class="kb">E</span></button>
+      <button data-gizmo="rotate">회전<span class="kb">R</span></button>
+    </div>
+
+    <h4>인스펙터</h4>
+    <div id="inspector"><div class="empty">에셋을 선택하세요</div></div>
+
+    <div class="editor-actions">
+      <button id="ed-save" class="full-width">설정 저장</button>
+      <button id="ed-reset" class="secondary">기본값 복원</button>
+      <button id="ed-export" class="secondary">JSON 복사</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Right panel: legacy map tool + file upload (edit mode only) ===== -->
+<div id="tool-shell">
+  <div class="right-panel">
+    <div class="tool-tab-bar">
+      <button data-tool-tab="map" class="active">맵 패턴</button>
+      <button data-tool-tab="upload">리소스 업로드</button>
+    </div>
+
+    <!-- Map tool -->
+    <div class="tool-section" data-tool-section="map">
+      <fieldset>
+        <legend>그리드 크기</legend>
+        <div class="row"><label>가로 (cols)</label><input type="range" id="map-cols" min="16" max="64" step="1"><span class="val"></span></div>
+        <div class="row"><label>세로 (rows)</label><input type="range" id="map-rows" min="16" max="64" step="1"><span class="val"></span></div>
+      </fieldset>
+
+      <fieldset>
+        <legend>팔레트</legend>
+        <div id="map-palette"></div>
+        <div style="font-size:10.5px; color:#889; margin-top:4px">좌클릭=칠하기 · 우클릭=지우기</div>
+      </fieldset>
+
+      <canvas id="map-canvas" width="260" height="260"></canvas>
+
+      <div class="toolbar-actions">
+        <button id="map-paste">📋 붙여넣기</button>
+        <button id="map-clear" class="secondary">전체 지우기</button>
+        <button id="map-auto-trim" class="secondary">빈 가장자리 제거</button>
+        <button id="map-load-cur" class="secondary">현재 패턴 불러오기</button>
+      </div>
+
+      <fieldset>
+        <legend>보빈 자동 분석</legend>
+        <div id="bobbin-preview"><em>비어있음</em></div>
+      </fieldset>
+
+      <div class="toolbar-actions">
+        <button id="map-test">🧪 테스트 (적용 + 리로드)</button>
+        <button id="map-build" class="secondary">💾 HTML 빌드</button>
+      </div>
+    </div>
+
+    <!-- Upload tool -->
+    <div class="tool-section" data-tool-section="upload" hidden>
+      <h4>리소스 교체</h4>
+      <select id="upload-target" class="target-select">
+        <option value="rail">rail.png (레일 외곽)</option>
+        <option value="railArrow">rail_arrow.png (화살표)</option>
+        <option value="woolKnot">grid_wool.png (실 매듭)</option>
+        <option value="threadRope">wool_texture.png (실 텍스처)</option>
+        <option value="trayGLB">tray.glb (트레이 3D)</option>
+        <option value="bobbinGLB">bobbin.glb (보빈 3D)</option>
+      </select>
+      <div id="drop-zone" class="drop-zone">
+        클릭하거나 파일을 끌어다 놓으세요
+        <span class="hint">PNG / GLB / GLTF</span>
+        <input type="file" id="file-input" accept=".png,.glb,.gltf" hidden>
+      </div>
+      <div id="upload-result" class="upload-result"></div>
+      <button id="btn-auto-trim" class="secondary">잉여 공간 자동 제거 (PNG)</button>
+    </div>
+  </div>
+</div>
+<script>
+/* =========================================================================
+ *  Wooloop Prototype — single HTML, PixiJS r7
+ *  Spec: see GAME_SPEC.md
+ * ========================================================================= */
+
+/* --- OnMessageFromFlutter buffering stub (CLAUDE.md required) --- */
+(function() {
+  const buf = [];
+  window.OnMessageFromFlutter = function(msg) { buf.push(msg); };
+  window.__flutterMsgBuf = buf;
+})();
+
+/* --- GameBridge --- */
+const GameBridge = {
+  init() {
+    const handle = (msg) => this.onFlutterMessage(msg);
+    if (window.__flutterMsgBuf) window.__flutterMsgBuf.forEach(handle);
+    window.OnMessageFromFlutter = handle;
+  },
+  send(eventName, data) {
+    const json = JSON.stringify({ event: eventName, data: data });
+    try {
+      if (window.FlutterChannel?.postMessage)               window.FlutterChannel.postMessage(json);
+      else if (window.webkit?.messageHandlers?.GameReels)   window.webkit.messageHandlers.GameReels.postMessage(json);
+      else if (window.AndroidBridge?.postMessage)           window.AndroidBridge.postMessage(json);
+      else if (window.ReactNativeWebView?.postMessage)      window.ReactNativeWebView.postMessage(json);
+      else if (window.flutter_inappwebview?.callHandler)    window.flutter_inappwebview.callHandler(eventName, data);
+      else if (window.parent !== window)                    window.parent.postMessage(json, '*');
+      else console.log('[GameBridge]', eventName, data);
+    } catch (e) { console.warn('GameBridge send error', e); }
+  },
+  _postLuna(typeName) {
+    try { window.FlutterChannel?.postMessage?.(JSON.stringify({ type: 'luna:' + typeName })); } catch (e) {}
+  },
+  notifyReady()   { this.send('GameStart', null); this._postLuna('started'); this.send('started', null); },
+  notifySuccess() { this._postLuna('success'); this.send('success', null); },
+  notifyFail()    { this._postLuna('fail');    this.send('fail', null); },
+  lightVibrate()  { this.send('LightVibrate', null); },
+  mediumVibrate() { this.send('MediumVibrate', null); },
+  onFlutterMessage(msg) {
+    try {
+      const p = typeof msg === 'string' ? JSON.parse(msg) : msg;
+      const key = (p.event ?? p.type ?? p.event_type ?? p.action ?? p.name ?? p.command ?? '').toString().toLowerCase();
+      if (key.includes('pause'))   { Game.paused = true; return; }
+      if (key.includes('resume') || key.includes('start')) { Game.paused = false; return; }
+      if (key.includes('uitoggle') || key.includes('ui'))  { Game.uiVisible = !Game.uiVisible; return; }
+      Game.paused = false; // defensive resume
+    } catch (e) { Game.paused = false; }
+  },
+};
+
+/* --- HapticThrottle --- */
+const HapticThrottle = {
+  lastLight: 0, lastMedium: 0,
+  light()  { const n=performance.now(); if(n-this.lastLight<30) return; this.lastLight=n; GameBridge.lightVibrate(); },
+  medium() { const n=performance.now(); if(n-this.lastMedium<200) return; this.lastMedium=n; GameBridge.mediumVibrate(); },
+};
+
+/* --- Procedural SFX (short, user-gesture unlocked) --- */
+const AudioSystem = {
+  ctx: null,
+  unlocked: false,
+  colorFreq: { blue: 520, red: 620, white: 760, black: 340, orange: 450 },
+  unlock() {
+    if (this.unlocked) return;
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    this.ctx = this.ctx || new Ctx();
+    this.ctx.resume?.();
+    this.unlocked = true;
+  },
+  tone(freq, duration = 0.08, type = 'sine', volume = 0.045, slide = 0) {
+    if (!this.ctx || this.ctx.state === 'suspended') return;
+    const now = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, now);
+    if (slide) osc.frequency.exponentialRampToValueAtTime(Math.max(40, freq + slide), now + duration);
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(volume, now + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+    osc.connect(gain).connect(this.ctx.destination);
+    osc.start(now);
+    osc.stop(now + duration + 0.02);
+  },
+  pull(color) { this.tone(this.colorFreq[color] || 520, 0.055, 'triangle', 0.035, 80); },
+  launch(color) { this.tone((this.colorFreq[color] || 520) * 0.75, 0.11, 'sine', 0.04, 160); },
+  slot() { this.tone(420, 0.09, 'triangle', 0.035, -120); },
+  pop() { this.tone(880, 0.12, 'sine', 0.04, 220); },
+  colorClear(color) { this.tone((this.colorFreq[color] || 520) * 1.25, 0.16, 'triangle', 0.05, 240); },
+  win() {
+    this.tone(620, 0.12, 'sine', 0.045, 120);
+    setTimeout(() => this.tone(820, 0.14, 'sine', 0.045, 180), 80);
+    setTimeout(() => this.tone(1040, 0.18, 'sine', 0.05, 220), 165);
+  },
+};
+
+window.addEventListener('pointerdown', () => AudioSystem.unlock(), { passive: true });
+
+/* --- GameTune --- */
+const GameTune = {
+  rail: {
+    lapDuration: 6.5,
+    boostMultiplier: 2.0,
+    clickCooldown: 0.5,
+  },
+  carrier: { total: 5 },
+  slots:   { total: 5 },
+  boost:   { triggerThreshold: 5 },
+  visual: {
+    pullPulseDuration: 0.15,
+    carrierReturnFast: 0.45,  // seconds (carrier flies back to dump quickly)
+    carrierReturnSlow: 0.9,   // seconds (carrier slides under and returns slowly)
+    bobbinJumpToSlot: 0.5,    // seconds
+    bobbinEnterRail:  0.62,   // seconds (queue→carrier landing)
+  },
+};
+
+/* =========================================================================
+ *  EditorTune — visual parameters editable via in-game editor panel.
+ *  Saved to localStorage as 'wooloop_editor_tune'. Reload picks up saved values.
+ * ========================================================================= */
+const EDITOR_DEFAULTS = {
+  version: 'unity-editor-2026-05-19-v4-tray-boarding',
+  // Arrows
+  arrowRadiusX: 0.36,            // ring half-WIDTH (X axis) = innerHalf + rim * X
+  arrowRadiusY: 0.36,            // ring half-HEIGHT (Y axis) = innerHalf + rim * Y
+  arrowSize: 0.28,               // arrow sprite size = rim * X
+  arrowCount: 28,                // number of arrows around the rail
+  arrowSecPerLap: 14,            // seconds for one full lap
+  arrowOffsetX: 0,               // shift entire arrow ring left/right (in outerHalf%)
+  arrowOffsetY: 0,               // shift entire arrow ring up/down (in outerHalf%)
+  // Bobbin (uses the SAME ring path as arrows, so it always lines up)
+  bobbinIdleScale: 2.0,          // upright waiting bobbin size = bobbinSize * X
+  bobbinIdleRotationDeg: 0,      // Z-axis (2D) rotation for queue/slot bobbins
+  bobbinIdleYRotationDeg: -18,   // 3D Y-axis rotation for queue/slot bobbins
+  bobbinIdleXRotationDeg: 0,     // 3D X-axis rotation for queue/slot bobbins (re-render)
+  bobbinSpriteScale: 2.0,        // lying rail bobbin size = bobbinSize * X
+  bobbinRailRotationDeg: 0,      // additional Z-axis (2D) rotation on rail
+  bobbinYRotationDeg: -18,       // 3D Y-axis rotation when bobbin lies on rail
+  bobbinXRotationDeg: -6,        // 3D X-axis rotation when bobbin lies on rail (default tilt)
+  // Tray (dump position)
+  dumpX: -0.84,                  // dump.x = cx + outerHalf * X (negative = left of center)
+  dumpY: 0.96,                   // dump.y = cy + outerHalf * X
+  trayDumpRotationDeg: 0,        // Z-axis (2D) rotation when waiting in dump
+  trayIdleScale: 1.0,            // tray stack size while waiting in dump
+  trayIdleYRotationDeg: 0,       // 3D Y-axis rotation for waiting tray
+  trayIdleXRotationDeg: 0,       // 3D X-axis rotation for waiting tray
+  trayScale: 1.82,               // tray size while lying on rail
+  trayDumpVisible: 1,            // 0 = hide tray in dump, 1 = show stack
+  // Tray (launched / on rail)
+  trayLaunchedRotationDeg: 0,    // Z-axis (2D) rotation when on rail
+  trayYRotationDeg: 0,           // 3D Y-axis rotation of tray model (re-renders texture)
+  trayTiltDeg: 90,               // 3D X-axis tilt for lying tray (0=standing, 90=lying flat)
+  // Queue / Slot / Counter (extended UI editor knobs)
+  queueCols: 3,                  // columns in the queue grid
+  queueGap: 0.72,                // queue cell width = bobbinSize * (queueGap + 1)
+  queueBobbinScale: 1.15,        // queue bobbin sprite size = bobbinSize * X
+  slotSize: 92,                  // slot size in px (clamped to fit screen)
+  slotXOffset: 0,                // slot row x shift (px) from center
+  slotYOffset: 238,              // slot row y = hoop bottom + slotYOffset
+  queueXOffset: 0,               // queue x shift (px) from center
+  queueYOffset: 55,              // queue row y extra offset from slot row
+  counterFontSize: 31,           // counter text font size (px)
+  counterOffsetX: 58,            // counter x = dump.x + offset
+  counterOffsetY: 14,            // counter y = dump.y + offset
+  // Rail position + pixel art area
+  railOffsetX: 0,                // px shift of entire rail horizontally
+  railOffsetY: 0,                // px shift of entire rail vertically
+  gridScaleX: 1.0,               // pixel-art area width  = innerSize * X
+  gridScaleY: 1.0,               // pixel-art area height = innerSize * X
+  gridShiftX: 0,                 // px shift of pixel art inside the rail (X)
+  gridShiftY: 0,                 // px shift of pixel art inside the rail (Y)
+  // Arrow visibility range (rail-loop fraction 0..1). The dump's feeder tube
+  // overlays this region, so chevron arrows would clash with the dump art there.
+  // Arrows are hidden when t ∈ [arrowHideStart, arrowHideEnd) modulo 1.
+  // Default range covers the bottom-left corner where the dump enters the rail.
+  arrowHideStart: 0.0,           // 0 = start of CCW loop (= 7-o'clock corner)
+  arrowHideEnd:   0.0,           // end of hide range (inclusive). 0=disabled
+  // Brush sprite (split out from rail.png). Offsets are fractions of outerHalf.
+  brushOffsetX: -0.78,
+  brushOffsetY: 0.75,
+  brushScale:   1.0,
+  // Render layer order, bottom → top. Editable from the inspector so the user
+  // can reshuffle which objects sit on top of which.
+  layerOrder: ['bg', 'hoop', 'wool', 'thread', 'carrier', 'slotBg', 'bobbin', 'fx', 'ui'],
+};
+
+// Default render order (bottom → top). Used as fallback and for reset.
+const DEFAULT_LAYER_ORDER = EDITOR_DEFAULTS.layerOrder.slice();
+
+// Human-readable Korean names for each Game.layers.* key (used in the inspector).
+const LAYER_NAMES_KO = {
+  bg: '배경', hoop: '후프 / 화살표', wool: '울 그리드', thread: '실',
+  carrier: '캐리어 (레일)', slotBg: '슬롯 배경', bobbin: '보빈',
+  fx: '효과', ui: 'UI (카운터/덤프)',
+};
+
+// Map each editor asset to the Game.layers.* it lives in. Used by the
+// inspector's layer-order controls.
+const ASSET_LAYER_OF = {
+  hoop:       'hoop',
+  brush:      'hoop',
+  grid:       'wool',
+  arrows:     'hoop',
+  bobbinIdle: 'bobbin',
+  bobbinRail: 'bobbin',
+  trayIdle:   'ui',
+  trayRail:   'carrier',
+  slot:       'slotBg',
+  queue:      'bobbin',
+  counter:    'ui',
+};
+
+let EditorTune = (() => {
+  const fresh = () => {
+    const t = { ...EDITOR_DEFAULTS };
+    // Detach the array so user reorders don't mutate the defaults.
+    t.layerOrder = EDITOR_DEFAULTS.layerOrder.slice();
+    return t;
+  };
+  try {
+    const saved = localStorage.getItem('wooloop_editor_tune');
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (parsed && typeof parsed === 'object') {
+        // Merge saved values OVER defaults instead of dropping them on a version
+        // mismatch. New keys added in this build get their defaults; existing
+        // user edits survive across schema bumps.
+        const merged = { ...EDITOR_DEFAULTS, ...parsed, version: EDITOR_DEFAULTS.version };
+        merged.layerOrder = Array.isArray(parsed.layerOrder) && parsed.layerOrder.length
+          ? parsed.layerOrder.slice()
+          : EDITOR_DEFAULTS.layerOrder.slice();
+        if (parsed.version !== EDITOR_DEFAULTS.version) {
+          merged.trayDumpRotationDeg = EDITOR_DEFAULTS.trayDumpRotationDeg;
+          merged.trayIdleScale = EDITOR_DEFAULTS.trayIdleScale;
+        }
+        return merged;
+      }
+    }
+  } catch (e) {}
+  return fresh();
+})();
+
+const deg2rad = (d) => d * Math.PI / 180;
+
+/* --- Palette --- */
+const COLOR = {
+  bg:           0x62bfdb,
+  bgDeep:       0x4fb0d2,
+  hoopRim:      0x7f9da4,
+  hoopRimLight: 0xd7eff3,
+  hoopRimEdge:  0x56747f,
+  hoopInnerBg:  0x40516b,
+  hoopFabric:   0x384862,
+  carrier:      0x1377ea,
+  carrierLight: 0x48a6ff,
+  carrierDark:  0x0757b8,
+  metal:        0xcbd9dd,
+  metalDark:    0x677a82,
+  trayTint:      0x9fb2b8,
+  slotEmpty:    0x40516b,
+  slotEmptyBorder: 0xb8def2,
+  text:         0xffffff,
+  counterBg:    0x26364a,
+};
+
+const WOOL = {
+  blue:   { fill: 0x1f70e6, light: 0x66a7ff, dark: 0x0c48b2 },
+  red:    { fill: 0xef3a34, light: 0xff7a70, dark: 0xa51f20 },
+  white:  { fill: 0xeeeade, light: 0xffffff, dark: 0xb8b0a0 },
+  black:  { fill: 0x22222a, light: 0x50505a, dark: 0x050507 },
+  orange: { fill: 0xf47c12, light: 0xffb15a, dark: 0xa54b08 },
+};
+
+const QUEUE_VISIBLE_MAX = 6;
+const BOBBIN_MAX_COUNT = 40;
+// grid_wool.png is 1024×1024 with the visible knot covering ~70% of the frame
+// AND has alpha falloff at the edges. Multiplier ≥ 1/0.70 just barely closes the
+// hard gap; bump to ~1.7 so the soft edges fully cover adjacent cell boundaries.
+const GRID_WOOL_SPRITE_MULT = 1.70;
+
+/* --- Reference-inspired chicken pattern (28x28, generated as wool pixels) --- */
+function createChickenPattern() {
+  const width = 28;
+  const height = 28;
+  const cells = Array.from({ length: height }, () => Array(width).fill('blue'));
+  const setCell = (x, y, color) => {
+    const cx = Math.round(x);
+    const cy = Math.round(y);
+    if (cx >= 0 && cx < width && cy >= 0 && cy < height) cells[cy][cx] = color;
+  };
+  const pointInPoly = (px, py, pts) => {
+    let inside = false;
+    for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+      const xi = pts[i][0], yi = pts[i][1];
+      const xj = pts[j][0], yj = pts[j][1];
+      const intersects = ((yi > py) !== (yj > py)) &&
+        (px < ((xj - xi) * (py - yi)) / ((yj - yi) || 0.0001) + xi);
+      if (intersects) inside = !inside;
+    }
+    return inside;
+  };
+  const fillPoly = (color, pts) => {
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        if (pointInPoly(x + 0.5, y + 0.5, pts)) cells[y][x] = color;
+      }
+    }
+  };
+  const fillEllipse = (color, cx, cy, rx, ry) => {
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const dx = (x + 0.5 - cx) / rx;
+        const dy = (y + 0.5 - cy) / ry;
+        if (dx * dx + dy * dy <= 1) cells[y][x] = color;
+      }
+    }
+  };
+  const strokeLine = (color, x0, y0, x1, y1, radius = 0.5) => {
+    const dx = x1 - x0;
+    const dy = y1 - y0;
+    const len2 = dx * dx + dy * dy || 1;
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const px = x + 0.5;
+        const py = y + 0.5;
+        const t = Math.max(0, Math.min(1, ((px - x0) * dx + (py - y0) * dy) / len2));
+        const qx = x0 + t * dx;
+        const qy = y0 + t * dy;
+        if ((px - qx) ** 2 + (py - qy) ** 2 <= radius * radius) cells[y][x] = color;
+      }
+    }
+  };
+
+  // Black silhouette first, then colored stitch areas inside it.
+  fillPoly('black', [[1,24],[1,20],[3,18],[4,16],[6,15],[7,13],[9,12],[10,10],[14,8],[18,9],[21,12],[23,17],[23,23],[21,25],[10,25],[4,24]]);
+  fillPoly('white', [[3,23],[3,20],[5,18],[7,16],[8,14],[10,13],[11,11],[14,10],[17,11],[19,13],[21,17],[21,22],[19,23],[10,23],[5,22]]);
+  fillPoly('black', [[14,8],[18,7],[22,9],[23,13],[21,16],[17,16],[16,13],[15,10]]);
+  fillPoly('white', [[16,9],[18,9],[21,10],[21,13],[19,15],[17,14],[17,12]]);
+  fillPoly('black', [[15,6],[16,4],[18,4],[19,6],[21,6],[24,8],[22,10],[18,10],[16,9],[15,8]]);
+  fillPoly('red', [[16,6],[17,5],[18,6],[20,6],[22,8],[21,9],[18,9],[16,8]]);
+  fillPoly('red', [[20,10],[22,11],[21,13],[20,13]]);
+  fillEllipse('black', 13.7, 18.4, 4.1, 5.2);
+  fillEllipse('orange', 13.7, 18.3, 2.9, 4.0);
+  fillPoly('black', [[14,22],[16,21],[17,22],[16,23],[14,23]]);
+  fillPoly('black', [[19,21],[21,22],[21,24],[20,25],[18,24]]);
+  setCell(19, 11, 'black');
+  setCell(22, 10, 'black');
+  strokeLine('black', 2, 22, 12, 10, 0.45);
+  strokeLine('black', 20, 14, 20, 22, 0.45);
+
+  return { width, height, cells };
+}
+
+function countPatternCells(cells) {
+  const counts = {};
+  for (const row of cells) {
+    for (const color of row) {
+      if (!color) continue;
+      counts[color] = (counts[color] || 0) + 1;
+    }
+  }
+  return counts;
+}
+
+function createBobbinDeck(cells) {
+  const remaining = countPatternCells(cells);
+  const order = [
+    'blue', 'blue', 'black', 'black', 'blue', 'white',
+    'red', 'white', 'orange', 'blue', 'black', 'blue',
+    'white', 'orange', 'blue', 'black', 'red', 'blue',
+  ];
+  const deck = [];
+  let guard = 0;
+  while (Object.values(remaining).some(v => v > 0) && guard++ < 1000) {
+    let progressed = false;
+    for (const color of order) {
+      if (!remaining[color]) continue;
+      const count = Math.min(BOBBIN_MAX_COUNT, remaining[color]);
+      deck.push({ color, count });
+      remaining[color] -= count;
+      progressed = true;
+    }
+    if (!progressed) break;
+  }
+  return deck;
+}
+
+// PATTERN_OVERRIDE is injected by the "HTML 빌드" export from the map tool.
+// When non-null, it replaces the default chicken pattern.
+const PATTERN_OVERRIDE = null;
+// Session-stored pattern from the map tool's "테스트" button.
+function _loadSessionPattern() {
+  try {
+    const raw = sessionStorage.getItem('wooloop_test_pattern');
+    if (raw) return JSON.parse(raw);
+  } catch (e) {}
+  return null;
+}
+let PATTERN = PATTERN_OVERRIDE || _loadSessionPattern() || createChickenPattern();
+let INITIAL_BOBBINS = createBobbinDeck(PATTERN.cells);
+
+/* --- Helpers --- */
+const lerp = (a, b, t) => a + (b - a) * t;
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+const norm = (t) => ((t % 1) + 1) % 1;
+const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+
+/* =========================================================================
+ *  Layout
+ * ========================================================================= */
+const Layout = {
+  W: 0, H: 0,
+  hoop: { cx: 0, cy: 0, outerHalf: 0, innerHalf: 0, rim: 0, cornerRadius: 0 },
+  cellSize: 0,
+  ringHalf: 0,        // distance from hoop center to bobbin track center
+  dump: { x: 0, y: 0 },
+  counter: { x: 0, y: 0 },
+  slot: { y: 0, size: 0, spacing: 0, startX: 0 },
+  queue: { y: 0, size: 0, spacing: 0, startX: 0, rows: 2, cols: 3 },
+  bobbinSize: 0,
+
+  compute(W, H) {
+    this.W = W; this.H = H;
+    const reservedTop = 80;
+    const reservedBottom = 380;  // fixed — hoop size depends ONLY on viewport.
+
+    // Slot / queue intrinsic sizes (depend only on W).
+    const slotSizePre = Math.min((W - 40) / 5 - 12, EditorTune.slotSize);
+    const queueSizePre = slotSizePre * 0.85 * EditorTune.queueBobbinScale;
+    const queueSpacingPre = queueSizePre * (1 + EditorTune.queueGap);
+    const queueRowsPre = Math.max(1, Math.ceil(QUEUE_VISIBLE_MAX / EditorTune.queueCols));
+
+    // Hoop size is independent of slot/queue offsets — moving the slot row
+    // never resizes the hoop or shifts the rail / bobbins.
+    const hoopOuter = Math.max(120, Math.min(W * 0.92, H - reservedTop - reservedBottom));
+
+    // slotYOffset / queueYOffset are now independent absolute offsets from the
+    // hoop bottom — moving one does NOT move the other.
+    const effectiveSlotYOffset = EditorTune.slotYOffset;
+    const effectiveQueueYOffset = (EditorTune.queueYOffset || 0);
+
+    // Inner-area target: pixel art reaches just shy of the chevron arrow ring.
+    // With default arrowRadiusX=0.36 the arrow ring sits at radius
+    //   innerHalf + rim*0.36  →  0.359 × hoopOuter
+    // Setting the pixel art half-size to ~0.33 × hoopOuter keeps a small gap so
+    // the moving arrows + painted chevrons of rail.png stay visible.
+    const PIXEL_ART_HALF_FRAC = 0.33;       // pixel art half-size / hoopOuter
+    const RAIL_INNER_FRACTION = PIXEL_ART_HALF_FRAC * 2;  // 0.66
+    const innerSize = hoopOuter * RAIL_INNER_FRACTION;
+    const rim = (hoopOuter - innerSize) / 2;
+
+    this.hoop.outerHalf = hoopOuter / 2;
+    this.hoop.innerHalf = innerSize / 2;
+    this.hoop.rim = rim;
+    this.hoop.cornerRadius = hoopOuter * 0.08;
+    this.hoop.cx = W / 2 + (EditorTune.railOffsetX || 0);
+    this.hoop.cy = reservedTop + hoopOuter / 2 + (EditorTune.railOffsetY || 0);
+
+    // Compute the bounding box of non-empty pattern cells, then scale + center
+    // the grid so the pixel art FILLS the inner area regardless of pattern size.
+    let minR = PATTERN.height, maxR = -1, minC = PATTERN.width, maxC = -1;
+    for (let r = 0; r < PATTERN.height; r++) {
+      for (let c = 0; c < PATTERN.width; c++) {
+        if (PATTERN.cells[r][c]) {
+          if (r < minR) minR = r;
+          if (r > maxR) maxR = r;
+          if (c < minC) minC = c;
+          if (c > maxC) maxC = c;
+        }
+      }
+    }
+    if (maxR < 0) { minR = 0; maxR = PATTERN.height - 1; minC = 0; maxC = PATTERN.width - 1; }
+    const bboxRows = maxR - minR + 1;
+    const bboxCols = maxC - minC + 1;
+    this.pattern = { minR, maxR, minC, maxC, rows: bboxRows, cols: bboxCols };
+    // Pixel-art area is innerSize scaled by user knobs (gridScaleX/Y).
+    // The bbox is fitted into that area preserving aspect ratio, then shifted.
+    const areaW = innerSize * (EditorTune.gridScaleX || 1.0);
+    const areaH = innerSize * (EditorTune.gridScaleY || 1.0);
+    this.cellSize = Math.min(areaW / bboxCols, areaH / bboxRows);
+    const bboxW = bboxCols * this.cellSize;
+    const bboxH = bboxRows * this.cellSize;
+    // Offset relative to inner area's top-left (hoop.cx-innerHalf, hoop.cy-innerHalf).
+    // Centers the bbox, then adds user shift.
+    this.gridOffsetX = (innerSize - bboxW) / 2 + (EditorTune.gridShiftX || 0);
+    this.gridOffsetY = (innerSize - bboxH) / 2 + (EditorTune.gridShiftY || 0);
+
+    // Bobbin path uses the SAME ring as arrows so they always line up.
+    this.ringHalfX = this.hoop.innerHalf + rim * EditorTune.arrowRadiusX;
+    this.ringHalfY = this.hoop.innerHalf + rim * EditorTune.arrowRadiusY;
+    this.ringHalf = (this.ringHalfX + this.ringHalfY) / 2;  // legacy alias
+    // Bobbin visual size is anchored to hoopOuter (not rim) so it stays readable
+    // when the rim shrinks for large patterns.
+    this.bobbinSize = Math.max(rim * 0.42, hoopOuter * 0.092);
+
+    // Dump position (negative dumpX = left of center)
+    this.dump.x = this.hoop.cx + this.hoop.outerHalf * EditorTune.dumpX;
+    this.dump.y = this.hoop.cy + this.hoop.outerHalf * EditorTune.dumpY;
+
+    // Counter "X/5" label right of dump
+    this.counter.x = this.dump.x + EditorTune.counterOffsetX;
+    this.counter.y = this.dump.y + EditorTune.counterOffsetY;
+
+    // Slot row — anchored under the hoop with its own offset.
+    const hoopBottom = this.hoop.cy + this.hoop.outerHalf;
+    const slotsY = hoopBottom + effectiveSlotYOffset;
+    const slotSize = slotSizePre;
+    const slotSpacing = slotSize + 12;
+    this.slot.y = slotsY;
+    this.slot.size = slotSize;
+    this.slot.spacing = slotSpacing;
+    this.slot.startX = (W - slotSpacing * 5 + (slotSpacing - slotSize)) / 2 + slotSize / 2 + (EditorTune.slotXOffset || 0);
+
+    // Queue — anchored UNDER THE HOOP independently of slot.y. The 400px
+    // baseline preserves the original visual default. Final Y is clamped to
+    // keep the bottom row inside the viewport so the user can always reach the
+    // queue to edit it; queueYOffset still nudges within that visible band.
+    this.queue.cols = EditorTune.queueCols;
+    this.queue.size = queueSizePre;
+    this.queue.spacing = queueSpacingPre;
+    const QUEUE_BASE_FROM_HOOP = 400;
+    const queueExtent = (queueRowsPre - 1) * queueSpacingPre + queueSizePre / 2;
+    const queueDesired = hoopBottom + QUEUE_BASE_FROM_HOOP + effectiveQueueYOffset;
+    const queueMaxY = H - 24 - queueExtent;
+    const queueMinY = hoopBottom + queueSizePre / 2 + 8;
+    this.queue.y = Math.max(queueMinY, Math.min(queueDesired, queueMaxY));
+    this.queue.startX = W / 2 - this.queue.spacing * (this.queue.cols - 1) / 2 + (EditorTune.queueXOffset || 0);
+  },
+
+  cellCenter(row, col) {
+    const x0 = this.hoop.cx - this.hoop.innerHalf + this.gridOffsetX;
+    const y0 = this.hoop.cy - this.hoop.innerHalf + this.gridOffsetY;
+    return {
+      x: x0 + (col - this.pattern.minC + 0.5) * this.cellSize,
+      y: y0 + (row - this.pattern.minR + 0.5) * this.cellSize,
+    };
+  },
+
+  slotPos(i) {
+    return {
+      x: this.slot.startX + i * this.slot.spacing,
+      y: this.slot.y,
+    };
+  },
+
+  queuePos(i, row) {
+    // Two signatures supported:
+    //   queuePos(i)           — legacy, derives col & row from flat index
+    //   queuePos(col, row)    — explicit column & row
+    let c, r;
+    if (row === undefined) {
+      r = Math.floor(i / this.queue.cols);
+      c = i % this.queue.cols;
+    } else {
+      c = i;
+      r = row;
+    }
+    return {
+      x: this.queue.startX + c * this.queue.spacing,
+      y: this.queue.y + r * this.queue.spacing,
+    };
+  },
+};
+
+/* =========================================================================
+ *  RailPath — COUNTER-clockwise from 7 o'clock (bottom-left corner)
+ * ========================================================================= */
+const RailPath = {
+  segments: [],
+  totalLength: 0,
+  // Backward-compat signature: init(cx, cy, half, cr) treats X=Y=half.
+  // Asymmetric:               init(cx, cy, halfX, halfY, cr)
+  init(cx, cy, halfX, halfYOrCr, crMaybe) {
+    let halfY, cr;
+    if (crMaybe === undefined) {
+      halfY = halfX;
+      cr = halfYOrCr;
+    } else {
+      halfY = halfYOrCr;
+      cr = crMaybe;
+    }
+    this.segments = [];
+    const N = PATTERN.width;
+    const safeCr = Math.min(cr, Math.min(halfX, halfY) * 0.5);
+    const segH = 2 * halfX - 2 * safeCr;   // horizontal (top/bottom) length
+    const segV = 2 * halfY - 2 * safeCr;   // vertical (left/right) length
+    const arcL = Math.PI * safeCr / 2;
+    const c = safeCr;
+
+    // 1) Bottom side going RIGHT
+    this.segments.push({
+      kind: 'straight', length: segH, side: 'bottom',
+      x0: cx - halfX + c, y0: cy + halfY,
+      x1: cx + halfX - c, y1: cy + halfY,
+      dirAngle: 0,
+      N: N,
+    });
+    // 2) BR corner
+    this.segments.push({
+      kind: 'arc', length: arcL, side: 'corner',
+      ccx: cx + halfX - c, ccy: cy + halfY - c, r: c,
+      a0: Math.PI / 2, a1: 0,
+    });
+    // 3) Right side going UP
+    this.segments.push({
+      kind: 'straight', length: segV, side: 'right',
+      x0: cx + halfX, y0: cy + halfY - c,
+      x1: cx + halfX, y1: cy - halfY + c,
+      dirAngle: -Math.PI / 2,
+      N: N,
+    });
+    // 4) TR corner
+    this.segments.push({
+      kind: 'arc', length: arcL, side: 'corner',
+      ccx: cx + halfX - c, ccy: cy - halfY + c, r: c,
+      a0: 0, a1: -Math.PI / 2,
+    });
+    // 5) Top side going LEFT
+    this.segments.push({
+      kind: 'straight', length: segH, side: 'top',
+      x0: cx + halfX - c, y0: cy - halfY,
+      x1: cx - halfX + c, y1: cy - halfY,
+      dirAngle: Math.PI,
+      N: N,
+    });
+    // 6) TL corner
+    this.segments.push({
+      kind: 'arc', length: arcL, side: 'corner',
+      ccx: cx - halfX + c, ccy: cy - halfY + c, r: c,
+      a0: -Math.PI / 2, a1: -Math.PI,
+    });
+    // 7) Left side going DOWN
+    this.segments.push({
+      kind: 'straight', length: segV, side: 'left',
+      x0: cx - halfX, y0: cy - halfY + c,
+      x1: cx - halfX, y1: cy + halfY - c,
+      dirAngle: Math.PI / 2,
+      N: N,
+    });
+    // 8) BL corner
+    this.segments.push({
+      kind: 'arc', length: arcL, side: 'corner',
+      ccx: cx - halfX + c, ccy: cy + halfY - c, r: c,
+      a0: Math.PI, a1: Math.PI / 2,
+    });
+
+    this.totalLength = 2 * segH + 2 * segV + 4 * arcL;
+  },
+
+  position(t) {
+    let d = norm(t) * this.totalLength;
+    for (const seg of this.segments) {
+      if (d < seg.length) {
+        const u = d / seg.length;
+        if (seg.kind === 'straight') {
+          const x = seg.x0 + u * (seg.x1 - seg.x0);
+          const y = seg.y0 + u * (seg.y1 - seg.y0);
+          const cellIndex = clamp(Math.floor(u * seg.N), 0, seg.N - 1);
+          return { x, y, angle: seg.dirAngle, side: seg.side, cellIndex };
+        } else {
+          const theta = seg.a0 + u * (seg.a1 - seg.a0);
+          const x = seg.ccx + seg.r * Math.cos(theta);
+          const y = seg.ccy + seg.r * Math.sin(theta);
+          // CCW tangent: rotated 90° CW from radius
+          return { x, y, angle: theta - Math.PI / 2, side: 'corner', cellIndex: null };
+        }
+      }
+      d -= seg.length;
+    }
+    return { x: 0, y: 0, angle: 0, side: 'corner', cellIndex: null };
+  },
+};
+
+/* =========================================================================
+ *  WoolGrid — canvas pixels + visual rendering
+ * ========================================================================= */
+class WoolGrid {
+  constructor(layer) {
+    this.layer = layer;
+    this.grid = PATTERN.cells.map(row => row.slice()); // deep-ish copy
+    this.cellSprites = []; // 2D array of cell Graphics
+    this.layerCells = new PIXI.Container();
+    this.layerFx = new PIXI.Container();
+    layer.addChild(this.layerCells);
+    layer.addChild(this.layerFx);
+
+    this._build();
+  }
+
+  _build() {
+    for (let r = 0; r < PATTERN.height; r++) {
+      const row = [];
+      for (let c = 0; c < PATTERN.width; c++) {
+        const color = this.grid[r][c];
+        const pos = Layout.cellCenter(r, c);
+        const node = new PIXI.Container();
+        node.x = pos.x; node.y = pos.y;
+        if (color) {
+          // Solid square underlay — fills cellSize exactly so adjacent cells
+          // touch with zero gaps regardless of the sprite's alpha falloff.
+          const base = new PIXI.Graphics();
+          base.beginFill(WOOL[color].fill);
+          // 1.02 to hide sub-pixel rounding seams between cells.
+          const s = Layout.cellSize * 1.02;
+          base.drawRect(-s/2, -s/2, s, s);
+          base.endFill();
+          node.addChild(base);
+          if (Game.tex?.woolKnot) {
+            const sp = new PIXI.Sprite(Game.tex.woolKnot);
+            sp.anchor.set(0.5);
+            sp.width = sp.height = Layout.cellSize * GRID_WOOL_SPRITE_MULT;
+            sp.tint = WOOL[color].fill;
+            node.addChild(sp);
+          } else {
+            const g = new PIXI.Graphics();
+            this._drawWoolKnot(g, WOOL[color]);
+            node.addChild(g);
+          }
+        }
+        this.layerCells.addChild(node);
+        row.push(node);
+      }
+      this.cellSprites.push(row);
+    }
+  }
+
+  _drawWoolKnot(g, palette) {
+    g.clear();
+    const s = Layout.cellSize * 0.42;
+    const yarn = Math.max(2, s * 0.58);
+    g.beginFill(0x000000, 0.20);
+    g.drawEllipse(0, s * 0.18, s * 0.86, s * 0.52);
+    g.endFill();
+    g.lineStyle({ width: yarn * 1.12, color: palette.dark, alpha: 0.45, cap: PIXI.LINE_CAP.ROUND });
+    g.moveTo(-s * 0.78, -s * 0.48); g.lineTo(s * 0.78, s * 0.48);
+    g.moveTo(s * 0.78, -s * 0.48);  g.lineTo(-s * 0.78, s * 0.48);
+    g.lineStyle({ width: yarn, color: palette.fill, alpha: 1, cap: PIXI.LINE_CAP.ROUND });
+    g.moveTo(-s * 0.78, -s * 0.48); g.lineTo(s * 0.78, s * 0.48);
+    g.moveTo(s * 0.78, -s * 0.48);  g.lineTo(-s * 0.78, s * 0.48);
+  }
+
+  get(r, c) { return this.grid[r]?.[c] ?? null; }
+
+  remainingTotal() {
+    let n = 0;
+    for (let r = 0; r < PATTERN.height; r++)
+      for (let c = 0; c < PATTERN.width; c++)
+        if (this.grid[r][c]) n++;
+    return n;
+  }
+
+  remainingByColor(color) {
+    let n = 0;
+    for (let r = 0; r < PATTERN.height; r++)
+      for (let c = 0; c < PATTERN.width; c++)
+        if (this.grid[r][c] === color) n++;
+    return n;
+  }
+
+  /* Pull wool of `color` from row, scanning from `from` end.
+   * Rule: the OUTERMOST non-empty cell in that row from the bobbin's side
+   *       must match `color`. If a different color blocks, no pull.
+   * Returns {row,col} of pulled cell, or null if none. */
+  pullFromRow(color, row, from) {
+    if (row < 0 || row >= PATTERN.height) return null;
+    const w = PATTERN.width;
+    const idxs = from === 'left' ? [...Array(w).keys()] : [...Array(w).keys()].reverse();
+    for (const c of idxs) {
+      const cell = this.grid[row][c];
+      if (cell == null) continue;            // empty cell: keep scanning
+      if (cell === color) {                  // matches bobbin color → pull
+        this._consume(row, c);
+        return { row, col: c };
+      }
+      return null;                           // different color blocks the path
+    }
+    return null;
+  }
+  pullFromCol(color, col, from) {
+    if (col < 0 || col >= PATTERN.width) return null;
+    const h = PATTERN.height;
+    const idxs = from === 'top' ? [...Array(h).keys()] : [...Array(h).keys()].reverse();
+    for (const r of idxs) {
+      const cell = this.grid[r][col];
+      if (cell == null) continue;
+      if (cell === color) {
+        this._consume(r, col);
+        return { row: r, col };
+      }
+      return null;
+    }
+    return null;
+  }
+
+  _consume(r, c) {
+    this.grid[r][c] = null;
+    const g = this.cellSprites[r][c];
+    g.alpha = 1;
+    // pop animation handled by FX layer; just hide it after fx finishes
+    g.visible = false;
+  }
+
+  /* Set of colors currently exposed at any outermost non-empty cell of any row
+   * or column — i.e. colors that COULD be pulled if a matching bobbin reaches
+   * the rail. Used to weight queue refills toward useful colors. */
+  pullableColors() {
+    const set = new Set();
+    const H = PATTERN.height, W = PATTERN.width;
+    // Rows: scan from left and from right; first non-null cell is the exposed one
+    for (let r = 0; r < H; r++) {
+      for (let c = 0; c < W; c++) {
+        const v = this.grid[r][c];
+        if (v) { set.add(v); break; }
+      }
+      for (let c = W - 1; c >= 0; c--) {
+        const v = this.grid[r][c];
+        if (v) { set.add(v); break; }
+      }
+    }
+    // Columns: scan from top and from bottom
+    for (let c = 0; c < W; c++) {
+      for (let r = 0; r < H; r++) {
+        const v = this.grid[r][c];
+        if (v) { set.add(v); break; }
+      }
+      for (let r = H - 1; r >= 0; r--) {
+        const v = this.grid[r][c];
+        if (v) { set.add(v); break; }
+      }
+    }
+    return set;
+  }
+}
+
+/* =========================================================================
+ *  Bobbin — visual + state
+ * ========================================================================= */
+class Bobbin {
+  constructor(color, count) {
+    this.color = color;
+    this.count = count;
+    this.initialCount = count;
+    this.id = Bobbin._nextId++;
+
+    this.gfx = new PIXI.Container();
+    // Ground shadow sits BELOW everything so it never overlaps the puck face.
+    this.shadow = new PIXI.Graphics();
+    this.spin = new PIXI.Container();   // rotates with bobbin motion
+
+    // Sprite-based bobbin: pre-rendered 3D stages (0..10 wool rings).
+    // Two orientations: UPRIGHT (queue/slot) and LYING (rail).
+    if (Game.tex?.bobbinStagesUpright) {
+      this.orientation = 'upright';  // current orientation
+      this.sprite = new PIXI.Sprite(Game.tex.bobbinStagesUpright[0]);
+      this.sprite.anchor.set(0.5);
+      this.sprite.tint = WOOL[color].fill;
+      this.spin.addChild(this.sprite);
+    } else if (Game.tex?.bobbinStages) {
+      this.orientation = 'lying';
+      this.sprite = new PIXI.Sprite(Game.tex.bobbinStages[0]);
+      this.sprite.anchor.set(0.5);
+      this.sprite.tint = WOOL[color].fill;
+      this.spin.addChild(this.sprite);
+    } else {
+      this.orientation = 'upright';
+      this.base = new PIXI.Graphics();
+      this.spool = new PIXI.Graphics();
+      this.spin.addChild(this.base);
+      this.spin.addChild(this.spool);
+    }
+
+    // Label: white fill + thick black outline, no badge background.
+    // Sits directly on the bobbin's top face (centered) per reference.
+    this.badgeGroup = new PIXI.Container();
+    this.label = new PIXI.Text(String(count), {
+      fontFamily: '"Arial Black", "Helvetica Neue", "Apple SD Gothic Neo", "Noto Sans CJK KR", sans-serif',
+      fontSize: Math.round(Layout.bobbinSize * 0.55),
+      fontWeight: '900',
+      fill: 0xffffff,
+      stroke: 0x000000,
+      strokeThickness: Math.max(3, Math.round(Layout.bobbinSize * 0.10)),
+      lineJoin: 'round',
+      miterLimit: 2,
+    });
+    this.label.anchor.set(0.5);
+    this.badgeGroup.addChild(this.label);
+
+    this.gfx.addChild(this.shadow);
+    this.gfx.addChild(this.spin);
+    this.gfx.addChild(this.badgeGroup);
+
+    this.gfx.eventMode = 'static';
+    this.gfx.cursor = 'pointer';
+
+    this._scale = 1;
+    this._pulseT = 0;
+
+    this.updateVisualStyle();
+    this.redraw();
+  }
+
+  static _nextId = 1;
+
+  _drawShadow(isWaiting) {
+    // Soft elliptical drop shadow under the bobbin (matches reference).
+    // Two stacked ellipses give a gentle falloff without filters.
+    const s = this.shadow;
+    s.clear();
+    const size = Layout.bobbinSize;
+    const scale = isWaiting ? EditorTune.bobbinIdleScale : EditorTune.bobbinSpriteScale;
+    // Place at the base of the rendered sprite. The upright camera puts the
+    // bobbin's foot ~38% below the sprite center; the lying camera ~32%.
+    const baseY = isWaiting ? size * scale * 0.46 : size * scale * 0.40;
+    const rx = isWaiting ? size * scale * 0.42 : size * scale * 0.45;
+    const ry = isWaiting ? size * scale * 0.11 : size * scale * 0.12;
+    // Outer soft halo
+    s.beginFill(0x000000, 0.18);
+    s.drawEllipse(0, baseY, rx * 1.18, ry * 1.35);
+    s.endFill();
+    // Inner core shadow
+    s.beginFill(0x000000, 0.32);
+    s.drawEllipse(0, baseY, rx, ry);
+    s.endFill();
+  }
+
+  _updateLabelStyle() {
+    // Keep label readable as bobbinSize changes (re-layout / resize).
+    const big = this.count >= 10;
+    this.label.style.fontSize = big
+      ? Math.round(Layout.bobbinSize * 0.48)
+      : Math.round(Layout.bobbinSize * 0.56);
+    this.label.style.strokeThickness = Math.max(3, Math.round(Layout.bobbinSize * 0.10));
+    this.label.style.fill = 0xffffff;
+    this.label.style.stroke = 0x000000;
+  }
+
+  updateVisualStyle() {
+    const isWaiting = this.orientation !== 'lying';
+    const scale = isWaiting ? EditorTune.bobbinIdleScale : EditorTune.bobbinSpriteScale;
+    this.spin.rotation = isWaiting ? deg2rad(EditorTune.bobbinIdleRotationDeg || 0) : 0;
+    if (this.sprite) {
+      this.sprite.width = this.sprite.height = Layout.bobbinSize * scale;
+    }
+    this._drawShadow(isWaiting);
+    this._updateLabelStyle();
+    if (isWaiting) {
+       // Center the number on the upright bobbin's top flange.
+       // Camera tilt + Y rotation place the visible top face slightly above
+       // sprite center; offset upward so the number reads as sitting on top.
+       this.badgeGroup.x = 0;
+       this.badgeGroup.y = -Layout.bobbinSize * scale * 0.20;
+    } else {
+       // Rail (lying): per reference, the number sits BELOW the bobbin.
+       // The lying camera tilts the bobbin so its body fills roughly the
+       // top-center of the sprite; the badge lands just under the sprite.
+       this.badgeGroup.x = 0;
+       this.badgeGroup.y = Layout.bobbinSize * scale * 0.55;
+    }
+  }
+
+  redraw() {
+    if (this.sprite) {
+      // Texture stage updated in _updateStage. Just refresh label.
+      this._updateStage();
+      this.label.text = String(this.count);
+      this._updateLabelStyle();
+      return;
+    }
+    // Procedural fallback (kept for safety; reduced detail)
+    const r = Layout.bobbinSize * 0.55;
+    const pal = WOOL[this.color];
+    const b = this.base;
+    b.clear();
+    b.beginFill(0x000000, 0.26);
+    b.drawEllipse(0, r * 0.50, r * 0.92, r * 0.34);
+    b.endFill();
+    b.beginFill(pal.fill);
+    b.drawCircle(0, 0, r * 0.78);
+    b.endFill();
+    b.beginFill(pal.dark);
+    b.drawCircle(0, 0, r * 0.42);
+    b.endFill();
+    this._drawSpool();
+    this.label.text = String(this.count);
+    this._updateLabelStyle();
+  }
+
+  _updateStage() {
+    if (!this.sprite) return;
+    const stagesSet = (this.orientation === 'lying' && Game.tex?.bobbinStages)
+      ? Game.tex.bobbinStages
+      : (Game.tex?.bobbinStagesUpright || Game.tex?.bobbinStages);
+    if (!stagesSet) return;
+    const consumed = this.initialCount - this.count;
+    const ratio = this.initialCount === 0 ? 0 : consumed / this.initialCount;
+    const N = stagesSet.length;
+    const idx = clamp(1 + Math.floor(ratio * (N - 1)), 0, N - 1);
+    this.sprite.texture = stagesSet[idx];
+  }
+
+  setOrientation(o) {
+    this.orientation = o;
+    this.updateVisualStyle();
+    this._updateStage();
+  }
+
+  _drawSpool() {
+    if (!this.spool) return;
+    const r = Layout.bobbinSize * 0.55;
+    const consumed = this.initialCount - this.count;
+    const t = this.initialCount === 0 ? 0 : consumed / this.initialCount;
+    const threadR = lerp(r * 0.20, r * 0.48, clamp(t, 0, 1));
+    const pal = WOOL[this.color];
+    const s = this.spool;
+    s.clear();
+    s.beginFill(pal.fill);
+    s.drawCircle(0, 0, threadR);
+    s.endFill();
+  }
+
+  pulse() { this._pulseT = GameTune.visual.pullPulseDuration; }
+
+  update(dt) {
+    if (this._pulseT > 0) {
+      this._pulseT -= dt;
+      const u = clamp(this._pulseT / GameTune.visual.pullPulseDuration, 0, 1);
+      // ease pop: peaks at 0.5
+      const k = Math.sin(u * Math.PI);
+      this._scale = 1 + k * 0.12;
+    } else {
+      this._scale = lerp(this._scale, 1, 0.2);
+    }
+    this.gfx.scale.set(this._scale);
+  }
+
+  decrement(by = 1) {
+    this.count = Math.max(0, this.count - by);
+    this._updateStage();
+    this._drawSpool();
+    this.label.text = String(this.count);
+    this._updateLabelStyle();
+  }
+}
+
+/* =========================================================================
+ *  Carrier — visual ">" piece, rides on rail
+ * ========================================================================= */
+function drawReferenceTrayPlate(g, w, h, alpha = 1) {
+  g.clear();
+
+  // Deep side shadow / black outline.
+  g.beginFill(0x1d2730, alpha * 0.96);
+  g.drawRoundedRect(-w * 0.52, -h * 0.52, w * 0.98, h * 1.04, h * 0.13);
+  g.endFill();
+
+  // Dark ribbed body.
+  g.beginFill(0x344652, alpha);
+  g.drawRoundedRect(-w * 0.50, -h * 0.43, w * 0.78, h * 0.86, h * 0.11);
+  g.endFill();
+
+  // Subtle lower lip.
+  g.beginFill(0x24323d, alpha * 0.92);
+  g.drawRoundedRect(-w * 0.50, h * 0.18, w * 0.78, h * 0.25, h * 0.08);
+  g.endFill();
+
+  // Rib highlights, matching the reference stack side.
+  for (let i = 0; i < 5; i++) {
+    const x = -w * 0.43 + i * w * 0.125;
+    g.beginFill(0xe9f0ef, alpha * 0.78);
+    g.drawRoundedRect(x, -h * 0.36, w * 0.045, h * 0.73, w * 0.018);
+    g.endFill();
+    g.beginFill(0x91a4ac, alpha * 0.72);
+    g.drawRoundedRect(x + w * 0.036, -h * 0.33, w * 0.018, h * 0.67, w * 0.012);
+    g.endFill();
+  }
+
+  // Front cap: slanted pale gray face.
+  const capX = w * 0.16;
+  g.beginFill(0x2a3540, alpha);
+  g.drawPolygon([
+    capX - w * 0.035, -h * 0.47,
+    w * 0.47, -h * 0.34,
+    w * 0.47,  h * 0.34,
+    capX - w * 0.035, h * 0.47,
+  ]);
+  g.endFill();
+
+  g.beginFill(0xb7c2c5, alpha);
+  g.drawPolygon([
+    capX, -h * 0.40,
+    w * 0.42, -h * 0.29,
+    w * 0.42,  h * 0.29,
+    capX, h * 0.40,
+  ]);
+  g.endFill();
+
+  g.beginFill(0xdbe5e5, alpha * 0.42);
+  g.drawPolygon([
+    capX + w * 0.035, -h * 0.32,
+    w * 0.39, -h * 0.23,
+    w * 0.39, -h * 0.03,
+    capX + w * 0.035, -h * 0.12,
+  ]);
+  g.endFill();
+}
+
+function createReferenceTrayPlate() {
+  const node = new PIXI.Container();
+  const g = new PIXI.Graphics();
+  const w = Layout.bobbinSize * 1.52;
+  const h = Layout.bobbinSize * 0.72;
+  drawReferenceTrayPlate(g, w, h, 1);
+  node.addChild(g);
+  return node;
+}
+
+function drawReferenceTrayStack(container, count) {
+  if (!EditorTune.trayDumpVisible || count <= 0) return;
+  const s = Layout.bobbinSize * EditorTune.trayIdleScale;
+  const w = s * 1.52;
+  const h = s * 0.72;
+  const stack = new PIXI.Container();
+  stack.rotation = deg2rad(EditorTune.trayDumpRotationDeg || 0);
+
+  const shadow = new PIXI.Graphics();
+  shadow.beginFill(0x000000, 0.26);
+  shadow.drawEllipse(-w * 0.10, h * 0.50, w * 0.58, h * 0.30);
+  shadow.endFill();
+  stack.addChild(shadow);
+
+  const visible = Math.max(0, Math.min(GameTune.carrier.total, count));
+  for (let i = visible - 1; i >= 0; i--) {
+    const plate = new PIXI.Graphics();
+    const fade = 1 - i * 0.055;
+    drawReferenceTrayPlate(plate, w, h, fade);
+    plate.x = -i * s * 0.115;
+    plate.y = -i * s * 0.020;
+    stack.addChild(plate);
+  }
+
+  // Tiny blue lip from the holder, so the stack reads as inserted into the dock.
+  const lip = new PIXI.Graphics();
+  lip.beginFill(0x0f5ed9, 0.98);
+  lip.drawRoundedRect(-w * 0.58, -h * 0.56, w * 0.14, h * 1.12, h * 0.09);
+  lip.endFill();
+  lip.beginFill(0x4aa5ff, 0.45);
+  lip.drawRoundedRect(-w * 0.54, -h * 0.50, w * 0.035, h * 1.00, h * 0.04);
+  lip.endFill();
+  stack.addChild(lip);
+
+  container.addChild(stack);
+}
+
+class Carrier {
+  constructor(orientation = 'upright') {
+    this.gfx = new PIXI.Container();
+    this.orientation = orientation;
+    const texU = Game.tex?.trayUpright || Game.tex?.tray;
+    const texL = Game.tex?.trayLying || Game.tex?.tray;
+    if (texU || texL) {
+      this.upright = createReferenceTrayPlate();
+      this.lying = new PIXI.Sprite(texL || texU);
+      this.lying.anchor.set(0.5);
+      this.lying.tint = COLOR.trayTint;
+      this.updateVisualStyle();
+      this.upright.alpha = orientation === 'upright' ? 1 : 0;
+      this.lying.alpha = orientation === 'lying' ? 1 : 0;
+      this.gfx.addChild(this.lying);
+      this.gfx.addChild(this.upright);
+      this.sprite = orientation === 'upright' ? this.upright : this.lying;
+    } else {
+      this.body = new PIXI.Graphics();
+      this.gfx.addChild(this.body);
+      this.redraw();
+    }
+  }
+  refreshTextures() {
+    if (!this.upright || !this.lying) return;
+    if (Game.tex?.trayLying)   this.lying.texture   = Game.tex.trayLying;
+    this.lying.tint = COLOR.trayTint;
+    this.updateVisualStyle();
+  }
+  updateVisualStyle() {
+    if (!this.upright || !this.lying) return;
+    const lyingSize = Layout.bobbinSize * EditorTune.trayScale;
+    this.upright.scale.set(EditorTune.trayIdleScale);
+    this.lying.width = this.lying.height = lyingSize;
+    this.upright.rotation = deg2rad(EditorTune.trayDumpRotationDeg || 0);
+    this.lying.rotation = 0;
+  }
+  setOrientation(orientation, instant = false) {
+    if (!this.upright || !this.lying) return;
+    this.orientation = orientation;
+    this.updateVisualStyle();
+    if (instant) {
+      this.upright.alpha = orientation === 'upright' ? 1 : 0;
+      this.lying.alpha   = orientation === 'lying'   ? 1 : 0;
+      this.sprite = orientation === 'upright' ? this.upright : this.lying;
+    }
+  }
+  /* Manually drive cross-fade (0 → fully `from`, 1 → fully `to`). */
+  applyFade(from, to, u) {
+    if (!this.upright || !this.lying) return;
+    const upTarget = (to === 'upright') ? u : (1 - u);
+    const lyTarget = (to === 'lying')   ? u : (1 - u);
+    this.upright.alpha = (from === 'upright') ? (1 - u) + (to === 'upright' ? u : 0) : upTarget;
+    this.lying.alpha   = (from === 'lying')   ? (1 - u) + (to === 'lying'   ? u : 0) : lyTarget;
+    if (u >= 1) {
+      this.orientation = to;
+      this.sprite = (to === 'upright') ? this.upright : this.lying;
+    }
+  }
+  redraw() {
+    if (this.upright || this.lying) return;
+    // Fallback procedural drawing
+    const w = Layout.bobbinSize * 1.45;
+    const h = Layout.bobbinSize * 0.78;
+    const b = this.body;
+    b.clear();
+    b.beginFill(COLOR.carrier, 0.95);
+    b.drawRoundedRect(-w * 0.50, -h * 0.50, w, h, 5);
+    b.endFill();
+  }
+}
+
+/* =========================================================================
+ *  Game — main state machine
+ * ========================================================================= */
+const Game = {
+  app: null,
+  layers: {},
+  paused: true,           // CLAUDE.md invariant: starts true until app sends GameResume
+  started: false,
+  uiVisible: true,
+  ready: false,
+  ended: false,
+
+  // Resources
+  woolGrid: null,
+  deck: [],        // hidden upcoming bobbin specs
+  queue: [],       // visible bobbins, max QUEUE_VISIBLE_MAX
+  slots: [],       // length 5, slot[i] = {bobbin, sprite}|null
+  rail: [],        // array of active RailEntry
+  dumpCount: GameTune.carrier.total, // carriers available in dump
+  inFlightCarriers: [], // {phase, t, ...}
+  clickCooldownT: 0,
+  clearedColors: new Set(),
+  boostTriggered: false,
+
+  // FX / animations
+  pullFx: [],      // active pull thread animations
+  anims: [],       // unified animation list: { t, dur, update(eu,u), done }
+
+  // UI
+  counterText: null,
+  hoopGfx: null,
+  dumpGfx: null,
+  slotGfxs: [],
+
+  // RailEntry: { bobbin, t, carrier, lastPullKey, eligible (for boost looping) }
+};
+
+/* =========================================================================
+ *  Asset Loading
+ * ========================================================================= */
+const ASSET_PATHS = {
+  // Hoop frame and brush are now SEPARATE images so each can be positioned
+  // independently. The legacy `rail` (whole composite) is kept as a fallback
+  // for environments where the split assets are missing.
+  railHoop:   '2D_asset/image 232.png',
+  railBrush:  '2D_asset/image 231.png',
+  rail:       '2D_asset/rail.png',
+  railArrow:  '2D_asset/rail_arrow.png',
+  woolKnot:   '2D_asset/grid_wool.png',
+  threadRope: '2D_asset/wool_texture.png',
+};
+
+async function loadAll2DAssets() {
+  const tex = {};
+  for (const [key, url] of Object.entries(ASSET_PATHS)) {
+    // Encode spaces (and any other URL-sensitive chars in the segment) so
+    // filenames like "image 231.png" resolve correctly through PIXI/Assets.
+    const encoded = url.split('/').map(encodeURIComponent).join('/');
+    try {
+      tex[key] = await PIXI.Assets.load(encoded);
+    } catch (e) {
+      console.warn(`[asset] failed to load ${url}: ${e?.message || e}`);
+      tex[key] = null;
+    }
+  }
+  return tex;
+}
+
+/* Pre-render 3D bobbin (11 stages) and carrier tray via Three.js.
+ * Result: PIXI textures stored in Game.tex.bobbinStages[0..10] and Game.tex.tray */
+async function preRender3DAssets() {
+  const RENDER_SIZE = 512;
+  const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true, preserveDrawingBuffer: true });
+  renderer.setSize(RENDER_SIZE, RENDER_SIZE);
+  renderer.setPixelRatio(2);
+  renderer.outputEncoding = THREE.sRGBEncoding;
+  renderer.setClearColor(0x000000, 0);
+
+  // Two cameras:
+  //   camLying — high oblique view for bobbins/trays lying on rail
+  //   camUpright — top-oblique view for upright bobbins in queue/slot
+  const camLying = new THREE.OrthographicCamera(-1.32, 1.32, 1.32, -1.32, 0.1, 100);
+  camLying.position.set(0, 4.2, 1.55);
+  camLying.lookAt(0, 0, 0);
+
+  const camUpright = new THREE.OrthographicCamera(-1.25, 1.25, 1.25, -1.25, 0.1, 100);
+  camUpright.position.set(0, 1.08, 4.35);
+  camUpright.lookAt(0, 0.04, 0);
+
+  const scene = new THREE.Scene();
+  const ambient = new THREE.AmbientLight(0xffffff, 0.72);
+  scene.add(ambient);
+  const dir1 = new THREE.DirectionalLight(0xffffff, 1.05);
+  dir1.position.set(-2.5, 4.0, 3.0);
+  scene.add(dir1);
+  const dir2 = new THREE.DirectionalLight(0x9fd3ff, 0.32);
+  dir2.position.set(2, 1.2, -2);
+  scene.add(dir2);
+
+  const makeMaterial = (kind = 'bobbin') => {
+    if (kind === 'tray') {
+      return new THREE.MeshStandardMaterial({
+        color: 0x9fb2b8,
+        roughness: 0.58,
+        metalness: 0.08,
+      });
+    }
+    return new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      roughness: 0.42,
+      metalness: 0.02,
+    });
+  };
+
+  // Override source materials. Bobbins stay white and are Pixi-tinted per color;
+  // tray gets its reference-like pale metal color directly in the 3D pass.
+  const applyAssetMaterial = (root, kind = 'bobbin') => {
+    root.traverse(c => {
+      if (c.isMesh) {
+        c.material = makeMaterial(kind);
+        c.castShadow = false;
+        c.receiveShadow = false;
+      }
+    });
+  };
+
+  const loader = new THREE.GLTFLoader();
+  const [bobbinGLB, trayGLB] = await Promise.all([
+    loader.loadAsync('3D_asset/bobin.glb'),
+    loader.loadAsync('3D_asset/bobin_tray.glb'),
+  ]);
+
+  const captureToPixiTex = async (camera) => {
+    renderer.render(scene, camera);
+    const bitmap = await createImageBitmap(renderer.domElement);
+    return PIXI.Texture.from(bitmap);
+  };
+
+  const clearAddedMeshes = () => {
+    for (let i = scene.children.length - 1; i >= 0; i--) {
+      const c = scene.children[i];
+      if (!c.isLight) scene.remove(c);
+    }
+  };
+
+  // Three brightness tiers so Pixi tinting (multiply) yields three distinct
+  // shades of the same color: shell (darker), wool (brightest), stripes (dark).
+  const bobbinShellMat = new THREE.MeshStandardMaterial({
+    color: 0xb0b0b0,    // shell flanges/barrel → mid-dark after tint
+    roughness: 0.42,
+    metalness: 0.02,
+  });
+  const bobbinWoolMat = new THREE.MeshStandardMaterial({
+    color: 0xffffff,    // wool wrap → brightest after tint (clearly visible)
+    roughness: 0.52,
+    metalness: 0.00,
+  });
+  const bobbinLineMat = new THREE.MeshStandardMaterial({
+    color: 0x4a4a4a,    // winding stripes → dark bands on the wool surface
+    roughness: 0.70,
+    metalness: 0.01,
+  });
+
+  const addReferenceBobbinShell = (group, rings) => {
+    // `rings` is the pre-render stage index (0..10). In _updateStage:
+    //   full bobbin  (count = initialCount, ratio=0) → idx=1 → rings=1
+    //   empty bobbin (count = 0,            ratio=1) → idx=10 → rings=10
+    // GAME VISUAL: wool wraps ACCUMULATE on the bobbin as it gets used.
+    //   consumed ≈ 0 (fresh bobbin) → bare spool, no visible wool
+    //   consumed = 1 (fully used)   → thick wool wrap with many stripes
+    const consumed = clamp(rings / 10, 0, 1);
+
+    // Reference bobbin: longer central barrel + slightly thinner flanges.
+    const FLANGE_R_TOP = 0.88;
+    const FLANGE_R_BOTTOM = 0.92;
+    const FLANGE_H = 0.15;
+    const BARREL_H = 1.18;           // was 0.84 — extended per reference
+    const BARREL_R = 0.34;           // thinner so wool stands out around it
+    const HALF_Y = BARREL_H / 2 + FLANGE_H / 2;
+
+    const flangeGeo = new THREE.CylinderGeometry(FLANGE_R_TOP, FLANGE_R_BOTTOM, FLANGE_H, 72);
+    const barrelGeo = new THREE.CylinderGeometry(BARREL_R, BARREL_R * 1.04, BARREL_H, 64);
+
+    // Wool grows out from the barrel surface as the bobbin is used.
+    const WOOL_MAX_R = 0.80;
+    const WOOL_MIN_R = BARREL_R;     // starts flush with the barrel → invisible
+    const woolR = lerp(WOOL_MIN_R, WOOL_MAX_R, consumed);
+    const woolH = BARREL_H * 0.92;
+    const woolGeo = new THREE.CylinderGeometry(woolR, woolR * 0.98, woolH, 72);
+
+    const bottom = new THREE.Mesh(flangeGeo, bobbinShellMat);
+    bottom.position.y = -HALF_Y;
+    group.add(bottom);
+
+    const barrel = new THREE.Mesh(barrelGeo, bobbinShellMat);
+    barrel.position.y = 0;
+    group.add(barrel);
+
+    // Render wool + stripes only after a meaningful amount has accumulated,
+    // so the DEFAULT state reads as a bare spool (per game design).
+    if (woolR > BARREL_R * 1.15) {
+      const wool = new THREE.Mesh(woolGeo, bobbinWoolMat);
+      wool.position.y = 0;
+      group.add(wool);
+
+      // Stripe count scales with how much has accumulated: more used → more wraps.
+      const grooveCount = 3 + Math.round(consumed * 7);   // 3..10 stripes
+      const stripeR = woolR * 1.01;
+      for (let i = 0; i < grooveCount; i++) {
+        const tor = new THREE.Mesh(
+          new THREE.TorusGeometry(stripeR, 0.024, 8, 72),
+          bobbinLineMat
+        );
+        tor.rotation.x = Math.PI / 2;
+        tor.position.y = lerp(
+          -woolH * 0.42, woolH * 0.42,
+          grooveCount === 1 ? 0.5 : i / (grooveCount - 1)
+        );
+        tor.rotation.z = i * 0.52;
+        group.add(tor);
+      }
+    }
+
+    const top = new THREE.Mesh(flangeGeo, bobbinShellMat);
+    top.position.y = HALF_Y;
+    group.add(top);
+  };
+
+  // Helper to build a bobbin plus procedural wound-thread volume.
+  // External wool-ring GLB files are intentionally not used.
+  const buildBobbinGroup = (rings) => {
+    const group = new THREE.Group();
+    const bobbin = bobbinGLB.scene.clone();
+    applyAssetMaterial(bobbin, 'bobbin');
+    bobbin.scale.set(0.34, 0.34, 0.34);
+    group.add(bobbin);
+    addReferenceBobbinShell(group, rings);
+    return group;
+  };
+
+  // Re-render bobbin stages with Y-axis rotation applied.
+  // Upright and lying stages are intentionally separate so waiting bobbins can
+  // be tuned independently from rail bobbins.
+  const renderBobbinStagesAt = async (yDeg, orientation /* 'upright' | 'lying' */) => {
+    const newStages = [];
+    const xDeg = orientation === 'lying'
+      ? (EditorTune.bobbinXRotationDeg ?? -6)
+      : (EditorTune.bobbinIdleXRotationDeg ?? 0);
+    for (let rings = 0; rings <= 10; rings++) {
+      clearAddedMeshes();
+      const outer = new THREE.Group();
+      if (orientation === 'lying') {
+        outer.rotation.z = Math.PI / 2;
+      }
+      outer.rotation.x = deg2rad(orientation === 'lying' ? -xDeg : xDeg);
+      outer.rotation.y = deg2rad(yDeg);
+      scene.add(outer);
+      outer.add(buildBobbinGroup(rings));
+      newStages.push(await captureToPixiTex(orientation === 'lying' ? camLying : camUpright));
+    }
+    return newStages;
+  };
+
+  const bobbinStages = await renderBobbinStagesAt(EditorTune.bobbinYRotationDeg || 0, 'lying');
+  const bobbinStagesUpright = await renderBobbinStagesAt(
+    EditorTune.bobbinIdleYRotationDeg ?? EditorTune.bobbinYRotationDeg ?? 0,
+    'upright'
+  );
+
+  // Render the tray in one of two orientations.
+  //   "lying"   → flat plate seen top-down (wide silhouette, used on rail)
+  //   "upright" → plate stood on its edge (tall silhouette, used in dump stack)
+  // tiltDeg only applies to the lying case so the editor can tweak the lie-down angle.
+  const renderTrayAt = async (yDeg, tiltDeg, orientation = 'lying') => {
+    clearAddedMeshes();
+    const trayGroup = new THREE.Group();
+    if (orientation === 'upright') {
+      // Rotate plate 90° around its own Y so we see the edge → tall card silhouette.
+      trayGroup.rotation.y = deg2rad((yDeg || 0) + 90);
+      trayGroup.rotation.x = deg2rad(EditorTune.trayIdleXRotationDeg || 0);
+    } else {
+      const tilt = (tiltDeg !== undefined ? tiltDeg : EditorTune.trayTiltDeg);
+      trayGroup.rotation.x = -deg2rad(tilt);
+      trayGroup.rotation.y = deg2rad(yDeg);
+    }
+    scene.add(trayGroup);
+    const tray = trayGLB.scene.clone();
+    applyAssetMaterial(tray, 'tray');
+    trayGroup.add(tray);
+    const cam = (orientation === 'upright') ? camUpright : camLying;
+    return await captureToPixiTex(cam);
+  };
+  const trayLying   = await renderTrayAt(EditorTune.trayYRotationDeg || 0, EditorTune.trayTiltDeg, 'lying');
+  const trayUpright = await renderTrayAt(EditorTune.trayIdleYRotationDeg || 0, 0, 'upright');
+  const trayTex = trayLying;
+
+  // Keep the Three.js renderer/scene alive globally so we can re-render
+  // tray (and bobbin) at different Y rotations when the editor changes them.
+  window.Three3D = {
+    renderer, scene, camLying, camUpright,
+    trayGLB, bobbinGLB,
+    buildBobbinGroup, applyAssetMaterial, captureToPixiTex,
+    clearAddedMeshes,
+    renderTrayAt,
+    renderBobbinStagesAt,
+  };
+
+  return { bobbinStages, bobbinStagesUpright, tray: trayTex, trayUpright, trayLying };
+}
+
+/* =========================================================================
+ *  Boot
+ * ========================================================================= */
+async function boot() {
+  GameBridge.init();
+
+  const app = new PIXI.Application({
+    resizeTo: window,
+    backgroundAlpha: 0,
+    antialias: true,
+    resolution: Math.min(window.devicePixelRatio, 2),
+    autoDensity: true,
+  });
+  document.body.appendChild(app.view);
+  Game.app = app;
+
+  // Load 2D + 3D assets
+  Game.tex = await loadAll2DAssets();
+  try {
+    const tex3D = await preRender3DAssets();
+    Game.tex.bobbinStages = tex3D.bobbinStages;
+    Game.tex.bobbinStagesUpright = tex3D.bobbinStagesUpright;
+    Game.tex.tray = tex3D.tray;
+    Game.tex.trayUpright = tex3D.trayUpright;
+    Game.tex.trayLying = tex3D.trayLying;
+  } catch (e) {
+    console.warn('3D pre-render failed, falling back to procedural', e);
+    Game.tex.bobbinStages = null;
+    Game.tex.tray = null;
+    Game.tex.trayUpright = null;
+    Game.tex.trayLying = null;
+  }
+
+  Layout.compute(window.innerWidth, window.innerHeight);
+  RailPath.init(Layout.hoop.cx, Layout.hoop.cy, Layout.ringHalfX, Layout.ringHalfY, Layout.hoop.cornerRadius);
+
+  // Layer setup
+  Game.layers.bg      = new PIXI.Container();
+  Game.layers.hoop    = new PIXI.Container();
+  Game.layers.wool    = new PIXI.Container();
+  Game.layers.thread  = new PIXI.Container();
+  Game.layers.carrier = new PIXI.Container();  // carriers below bobbins
+  Game.layers.slotBg  = new PIXI.Container();  // slot squares — under bobbins so a slot bobbin sits on top
+  Game.layers.bobbin  = new PIXI.Container();
+  Game.layers.ui      = new PIXI.Container();
+  Game.layers.fx      = new PIXI.Container();
+  app.stage.addChild(Game.layers.bg);
+  app.stage.addChild(Game.layers.hoop);
+  app.stage.addChild(Game.layers.wool);
+  app.stage.addChild(Game.layers.thread);
+  app.stage.addChild(Game.layers.carrier);
+  app.stage.addChild(Game.layers.slotBg);
+  app.stage.addChild(Game.layers.bobbin);
+  app.stage.addChild(Game.layers.fx);
+  app.stage.addChild(Game.layers.ui);
+
+  // Apply any user-saved layer ordering (from EditorTune.layerOrder).
+  applyLayerOrder();
+
+  drawBackground();
+  drawHoop();
+  drawDump();
+  drawSlots();
+  Game.woolGrid = new WoolGrid(Game.layers.wool);
+
+  // Queue (initial bobbins)
+  buildQueue();
+
+  // Counter
+  buildCounter();
+
+  // Main loop
+  app.ticker.add(tick);
+
+  // Expose for debugging
+  window.Game = Game;
+  window.GameTune = GameTune;
+  window.EditorTune = EditorTune;
+  window.Layout = Layout;
+  window.RailPath = RailPath;
+  window.render_game_to_text = renderGameToText;
+  window.advanceTime = advanceTime;
+  window.addEventListener('keydown', onKeyDown);
+
+  // Initialize editor panel
+  initEditor();
+
+  // Pause/Resume support: per CLAUDE.md, do NOT wait — call Game.start() then notifyReady
+  startGame();
+  GameBridge.notifyReady();
+  Game.ready = true;
+
+  // dev: auto-resume if no native bridge
+  if (!window.FlutterChannel && !window.webkit?.messageHandlers && !window.AndroidBridge && !window.flutter_inappwebview) {
+    Game.paused = false;
+  }
+
+  window.addEventListener('resize', onResize);
+}
+
+function startGame() {
+  Game.started = true;
+  // Game.paused stays true per CLAUDE.md invariant
+}
+
+function onResize() {
+  // For prototype simplicity, just clear & rebuild on resize
+  // (production would reflow without recreating sprites)
+  Layout.compute(window.innerWidth, window.innerHeight);
+  RailPath.init(Layout.hoop.cx, Layout.hoop.cy, Layout.ringHalfX, Layout.ringHalfY, Layout.hoop.cornerRadius);
+  redrawAll();
+}
+
+/* Full rebuild of all visuals that depend on Layout, called after a window
+ * resize (or any structural change). Ensures rail.png, arrows, wool grid,
+ * slots and every sprite resize together so nothing falls out of alignment
+ * at different screen sizes. */
+function redrawAll() {
+  // 0. Background (sized off Layout.W/H).
+  if (Game.layers?.bg) {
+    Game.layers.bg.removeChildren();
+    drawBackground();
+  }
+
+  // 1. Rail.png hoop sprite + arrows (setupRailArrows runs inside drawHoop).
+  if (Game.hoopGfx) {
+    if (Game.hoopGfx.parent) Game.hoopGfx.parent.removeChild(Game.hoopGfx);
+    if (!Game.hoopGfx.destroyed) Game.hoopGfx.destroy({ children: true });
+    Game.hoopGfx = null;
+  }
+  drawHoop();
+
+  // 2. Wool grid — cellSize / gridOffset depend on the new innerSize.
+  if (Game.woolGrid) {
+    Game.layers.wool.removeChildren();
+    Game.woolGrid = new WoolGrid(Game.layers.wool);
+  }
+
+  // 3. Slot graphics — drawSlots rebuilds; clear existing first.
+  for (const g of Game.slotGfxs) {
+    if (g.parent) g.parent.removeChild(g);
+    if (!g.destroyed) g.destroy();
+  }
+  Game.slotGfxs = [];
+  drawSlots();
+
+  // 4. Dump container — just reposition (children get rebuilt via redrawDump).
+  if (Game.dumpGfx) {
+    Game.dumpGfx.x = Layout.dump.x;
+    Game.dumpGfx.y = Layout.dump.y;
+    redrawDump();
+  }
+
+  // 5. Counter text. Reposition the CONTAINER; the text sits at (0,0) inside.
+  if (Game.counterContainer) {
+    Game.counterContainer.x = Layout.counter.x;
+    Game.counterContainer.y = Layout.counter.y;
+  }
+  if (Game.counterText) {
+    Game.counterText.x = 0;
+    Game.counterText.y = 0;
+    Game.counterText.style.fontSize = EditorTune.counterFontSize;
+  }
+
+  // 6. Every bobbin: resize sprite + redraw label (label scales with bobbinSize).
+  const allBobbins = [];
+  for (const e of Game.queue) allBobbins.push(e.bobbin);
+  for (const s of Game.slots) if (s) allBobbins.push(s.bobbin);
+  for (const e of Game.rail) allBobbins.push(e.bobbin);
+  for (const f of Game.inFlightCarriers) if (f.bobbin) allBobbins.push(f.bobbin);
+  for (const b of allBobbins) {
+    if (b.updateVisualStyle) b.updateVisualStyle();
+  }
+
+  // 7. Carriers (rail trays).
+  for (const e of Game.rail) e.carrier?.updateVisualStyle?.();
+  for (const f of Game.inFlightCarriers) f.carrier?.updateVisualStyle?.();
+
+  // 8. Reposition queue + slot bobbins (rail bobbins move via tickRail).
+  if (Game.queue) refreshQueueLayout(0);
+  for (let i = 0; i < Game.slots.length; i++) {
+    const s = Game.slots[i];
+    if (s && s.bobbin?.gfx) {
+      const p = Layout.slotPos(i);
+      s.bobbin.gfx.x = p.x;
+      s.bobbin.gfx.y = p.y;
+    }
+  }
+}
+
+/* =========================================================================
+ *  Drawing helpers
+ * ========================================================================= */
+
+/* Re-order Game.layers on the stage to match EditorTune.layerOrder.
+ * The order array lists layer keys from bottom → top. Layers not listed
+ * (e.g. after a default reset) are appended at the end so they stay visible. */
+function applyLayerOrder() {
+  if (!Game.app?.stage || !Game.layers) return;
+  const order = (Array.isArray(EditorTune.layerOrder) && EditorTune.layerOrder.length)
+    ? EditorTune.layerOrder
+    : DEFAULT_LAYER_ORDER;
+  const seen = new Set();
+  for (const key of order) {
+    const layer = Game.layers[key];
+    if (layer && layer.parent === Game.app.stage) {
+      Game.app.stage.addChild(layer);  // re-adding promotes to top.
+      seen.add(key);
+    }
+  }
+  // Catch any default layers missing from the saved order so they don't vanish.
+  for (const key of DEFAULT_LAYER_ORDER) {
+    if (seen.has(key)) continue;
+    const layer = Game.layers[key];
+    if (layer && layer.parent === Game.app.stage) Game.app.stage.addChild(layer);
+  }
+}
+
+function drawBackground() {
+  const g = new PIXI.Graphics();
+  g.beginFill(COLOR.bg);
+  g.drawRect(0, 0, Layout.W, Layout.H);
+  g.endFill();
+  // Soft woven-paper texture: deterministic flecks and faint diamonds.
+  g.beginFill(0xffffff, 0.06);
+  for (let y = 28; y < Layout.H; y += 72) {
+    for (let x = 24; x < Layout.W; x += 76) {
+      const wobble = Math.sin(x * 0.037 + y * 0.021) * 7;
+      g.drawCircle(x + wobble, y, 1.3);
+    }
+  }
+  g.endFill();
+  g.lineStyle(1.2, 0xffffff, 0.045);
+  for (let i = 0; i < 42; i++) {
+    const x = (i * 73) % Math.max(1, Layout.W);
+    const y = 80 + ((i * 131) % Math.max(1, Layout.H - 120));
+    const s = 7 + (i % 3) * 2;
+    g.moveTo(x, y - s);
+    g.lineTo(x + s, y);
+    g.lineTo(x, y + s);
+    g.lineTo(x - s, y);
+    g.lineTo(x, y - s);
+  }
+  g.lineStyle(0);
+  g.beginFill(COLOR.bgDeep, 0.16);
+  g.drawRect(0, Layout.H * 0.58, Layout.W, Layout.H * 0.42);
+  g.endFill();
+  Game.layers.bg.addChild(g);
+}
+
+function drawHoop() {
+  const L = Layout.hoop;
+
+  // Container groups the hoop frame + brush so they can be destroyed as one.
+  const container = new PIXI.Container();
+
+  if (Game.tex?.railHoop && Game.tex?.railBrush) {
+    // SPLIT version: separate hoop-frame and brush sprites, each tunable.
+    const scale = (L.outerHalf * 2) / Game.tex.railHoop.width;
+
+    const hoopSprite = new PIXI.Sprite(Game.tex.railHoop);
+    hoopSprite.anchor.set(0.5);
+    hoopSprite.scale.set(scale);
+    hoopSprite.x = L.cx;
+    hoopSprite.y = L.cy;
+    container.addChild(hoopSprite);
+
+    // Brush: re-creates the bottom-left protrusion of the original rail.png.
+    // Offsets are in fractions of L.outerHalf so they scale with the hoop;
+    // exposed via EditorTune for visual tuning.
+    const brushSprite = new PIXI.Sprite(Game.tex.railBrush);
+    brushSprite.anchor.set(0.5);
+    brushSprite.scale.set(scale * (EditorTune.brushScale ?? 1.0));
+    brushSprite.x = L.cx + L.outerHalf * (EditorTune.brushOffsetX ?? -0.78);
+    brushSprite.y = L.cy + L.outerHalf * (EditorTune.brushOffsetY ?? 0.75);
+    container.addChild(brushSprite);
+    Game.brushGfx = brushSprite;
+
+    Game.layers.hoop.addChild(container);
+    Game.hoopGfx = container;
+  } else if (Game.tex?.rail) {
+    // Legacy single-image fallback (rail.png with brush baked in).
+    const sprite = new PIXI.Sprite(Game.tex.rail);
+    sprite.anchor.set(0.5);
+    const RAIL_HOOP_WIDTH_FRACTION = 0.85;
+    const scale = (L.outerHalf * 2) / (Game.tex.rail.width * RAIL_HOOP_WIDTH_FRACTION);
+    sprite.scale.set(scale);
+    const HOOP_BODY_OFFSET_X = 0.03;
+    const HOOP_BODY_OFFSET_Y = -0.05;
+    sprite.x = L.cx - HOOP_BODY_OFFSET_X * Game.tex.rail.width * scale;
+    sprite.y = L.cy - HOOP_BODY_OFFSET_Y * Game.tex.rail.height * scale;
+    container.addChild(sprite);
+
+    Game.layers.hoop.addChild(container);
+    Game.hoopGfx = container;
+  } else {
+    // Procedural fallback when no asset is available.
+    const g = new PIXI.Graphics();
+    g.beginFill(COLOR.hoopRim);
+    g.drawRoundedRect(L.cx - L.outerHalf, L.cy - L.outerHalf, L.outerHalf * 2, L.outerHalf * 2, L.cornerRadius);
+    g.endFill();
+    g.beginFill(COLOR.hoopInnerBg);
+    g.drawRoundedRect(L.cx - L.innerHalf, L.cy - L.innerHalf, L.innerHalf * 2, L.innerHalf * 2, L.cornerRadius * 0.4);
+    g.endFill();
+    Game.layers.hoop.addChild(g);
+    Game.hoopGfx = g;
+  }
+
+  // Animated rail arrows moving CCW around the rail
+  setupRailArrows();
+}
+
+function drawChevrons(g) {
+  // (legacy procedural chevron drawing; kept for fallback, not used when rail.png is loaded)
+  const N = 44;
+  for (let i = 0; i < N; i++) {
+    const t = i / N + 0.5 / N;
+    const p = RailPath.position(t);
+    const s = Layout.hoop.rim * 0.23;
+    const a = p.angle;
+    const px = Math.cos(a), py = Math.sin(a);
+    const nx = -py, ny = px;
+    g.lineStyle(Math.max(2, Layout.hoop.rim * 0.035), 0xcce1e6, 0.28);
+    g.moveTo(p.x - px * s - nx * s, p.y - py * s - ny * s);
+    g.lineTo(p.x + px * s, p.y + py * s);
+    g.lineTo(p.x - px * s + nx * s, p.y - py * s + ny * s);
+  }
+}
+
+/* Animated rail arrows flowing CCW around the rail */
+function setupRailArrows() {
+  if (!Game.tex?.railArrow) return;
+  if (Game.railArrows) {
+    for (const a of Game.railArrows) { if (a.parent) a.parent.removeChild(a); }
+  }
+  const N_ARROWS = Math.round(EditorTune.arrowCount);
+  const size = Layout.hoop.rim * EditorTune.arrowSize;
+  Game.railArrows = [];
+  for (let i = 0; i < N_ARROWS; i++) {
+    const sp = new PIXI.Sprite(Game.tex.railArrow);
+    sp.anchor.set(0.5);
+    sp.width = size;
+    sp.height = size;
+    sp.alpha = 0.45;
+    sp.tOffset = i / N_ARROWS;
+    Game.layers.hoop.addChild(sp);
+    Game.railArrows.push(sp);
+  }
+}
+
+// Compute a position on a rounded-rectangle path with INDEPENDENT X/Y half-extents.
+// (Used for chevron arrows — allows tuning width and height separately.)
+function arrowPathPosition(t) {
+  const offsetX = Layout.hoop.outerHalf * EditorTune.arrowOffsetX;
+  const offsetY = Layout.hoop.outerHalf * EditorTune.arrowOffsetY;
+  const cx = Layout.hoop.cx + offsetX, cy = Layout.hoop.cy + offsetY;
+  const halfX = Layout.hoop.innerHalf + Layout.hoop.rim * EditorTune.arrowRadiusX;
+  const halfY = Layout.hoop.innerHalf + Layout.hoop.rim * EditorTune.arrowRadiusY;
+  // Corner radius capped so it never exceeds half of the shorter side
+  const cr = Math.min(Layout.hoop.cornerRadius, Math.min(halfX, halfY) * 0.5);
+  const segH = 2 * halfX - 2 * cr;  // horizontal (top/bottom) segment length
+  const segV = 2 * halfY - 2 * cr;  // vertical (left/right) segment length
+  const arcL = Math.PI * cr / 2;
+  const totalLength = 2 * segH + 2 * segV + 4 * arcL;
+  let d = ((t % 1) + 1) % 1 * totalLength;
+  // CCW from 7 o'clock: bottom → BR corner → right → TR → top → TL → left → BL
+  const segments = [
+    {kind:'s', length: segH, x0: cx - halfX + cr, y0: cy + halfY, x1: cx + halfX - cr, y1: cy + halfY, dir: 0},
+    {kind:'a', length: arcL, ccx: cx + halfX - cr, ccy: cy + halfY - cr, r: cr, a0: Math.PI/2, a1: 0},
+    {kind:'s', length: segV, x0: cx + halfX, y0: cy + halfY - cr, x1: cx + halfX, y1: cy - halfY + cr, dir: -Math.PI/2},
+    {kind:'a', length: arcL, ccx: cx + halfX - cr, ccy: cy - halfY + cr, r: cr, a0: 0, a1: -Math.PI/2},
+    {kind:'s', length: segH, x0: cx + halfX - cr, y0: cy - halfY, x1: cx - halfX + cr, y1: cy - halfY, dir: Math.PI},
+    {kind:'a', length: arcL, ccx: cx - halfX + cr, ccy: cy - halfY + cr, r: cr, a0: -Math.PI/2, a1: -Math.PI},
+    {kind:'s', length: segV, x0: cx - halfX, y0: cy - halfY + cr, x1: cx - halfX, y1: cy + halfY - cr, dir: Math.PI/2},
+    {kind:'a', length: arcL, ccx: cx - halfX + cr, ccy: cy + halfY - cr, r: cr, a0: Math.PI, a1: Math.PI/2},
+  ];
+  for (const seg of segments) {
+    if (d < seg.length) {
+      const u = d / seg.length;
+      if (seg.kind === 's') {
+        return { x: seg.x0 + u*(seg.x1-seg.x0), y: seg.y0 + u*(seg.y1-seg.y0), angle: seg.dir };
+      } else {
+        const theta = seg.a0 + u*(seg.a1-seg.a0);
+        return {
+          x: seg.ccx + seg.r * Math.cos(theta),
+          y: seg.ccy + seg.r * Math.sin(theta),
+          angle: theta - Math.PI/2,
+        };
+      }
+    }
+    d -= seg.length;
+  }
+  return { x: cx, y: cy, angle: 0 };
+}
+
+function tickRailArrows(dt) {
+  if (!Game.railArrows) return;
+  const ARROW_FLOW_SPEED = 1 / EditorTune.arrowSecPerLap;
+  Game.arrowGlobalT = (Game.arrowGlobalT || 0) + dt * ARROW_FLOW_SPEED;
+  const hideStart = norm(EditorTune.arrowHideStart || 0);
+  const hideEnd   = norm(EditorTune.arrowHideEnd   || 0);
+  const hideActive = hideEnd !== hideStart;
+  for (const sp of Game.railArrows) {
+    const t = norm(sp.tOffset + Game.arrowGlobalT);
+    const p = arrowPathPosition(t);
+    sp.x = p.x;
+    sp.y = p.y;
+    sp.rotation = p.angle;
+    if (hideActive) {
+      // Hide arrows whose t falls inside [start, end), wrapping around 1.
+      const inRange = (hideStart < hideEnd)
+        ? (t >= hideStart && t < hideEnd)
+        : (t >= hideStart || t < hideEnd);  // wraps past 1
+      sp.visible = !inRange;
+    } else {
+      sp.visible = true;
+    }
+  }
+}
+
+function drawDump() {
+  const c = new PIXI.Container();
+  c.x = Layout.dump.x;
+  c.y = Layout.dump.y;
+  Game.dumpGfx = c;
+  Game.layers.ui.addChild(c);
+  redrawDump();
+}
+function redrawDump() {
+  const c = Game.dumpGfx;
+  c.removeChildren();
+  // Reference-style ribbed tray stack inside the blue feeder dock.
+  drawReferenceTrayStack(c, Game.dumpCount);
+}
+
+function buildCounter() {
+  Game.counterContainer = new PIXI.Container();
+  Game.counterContainer.x = Layout.counter.x;
+  Game.counterContainer.y = Layout.counter.y;
+
+  const t = new PIXI.Text(`${Game.dumpCount}/${GameTune.carrier.total}`, {
+    fontFamily: 'sans-serif',
+    fontSize: EditorTune.counterFontSize,
+    fontWeight: '800',
+    fill: 0xffffff,
+    stroke: 0x000000, strokeThickness: 3,
+  });
+  t.anchor.set(0, 0.5);
+  t.x = -15;
+
+  Game.counterContainer.addChild(t);
+
+  Game.layers.ui.addChild(Game.counterContainer);
+  Game.counterText = t;
+}
+function updateCounter() {
+  if (!Game.counterText) return;
+  Game.counterText.text = `${Game.dumpCount}/${GameTune.carrier.total}`;
+}
+
+function drawSlots() {
+  for (let i = 0; i < GameTune.slots.total; i++) {
+    const p = Layout.slotPos(i);
+    const g = new PIXI.Graphics();
+    const s = Layout.slot.size;
+    
+    g.beginFill(0x576e7d);
+    g.drawRoundedRect(-s / 2, -s / 2, s, s, 10);
+    g.endFill();
+    
+    g.beginFill(0x405566);
+    g.drawRoundedRect(-s / 2 + 2, -s / 2 + 2, s - 4, s - 4, 8);
+    g.endFill();
+
+    g.beginFill(0x6a8190);
+    g.drawRoundedRect(-s / 2 + 4, -s / 2 + 4, s - 4, s - 4, 8);
+    g.endFill();
+
+    g.beginFill(0x314250);
+    g.drawRoundedRect(-s / 2 + 6, -s / 2 + 6, s - 12, s - 12, 6);
+    g.endFill();
+
+    g.x = p.x;
+    g.y = p.y;
+    Game.layers.slotBg.addChild(g);
+    Game.slotGfxs.push(g);
+    Game.slots.push(null);
+  }
+}
+
+function buildQueue() {
+  Game.deck = INITIAL_BOBBINS.map(spec => ({ ...spec }));
+  refillQueue(true);
+}
+
+/* Pick the column with the fewest current entries (ties → smallest col index). */
+function pickQueueColumnForNewEntry() {
+  const cols = Layout.queue.cols;
+  const counts = new Array(cols).fill(0);
+  for (const e of Game.queue) counts[e.col]++;
+  let chosen = 0, min = Infinity;
+  for (let c = 0; c < cols; c++) {
+    if (counts[c] < min) { min = counts[c]; chosen = c; }
+  }
+  return chosen;
+}
+
+/* Pick the next deck index to dispense, weighted toward colors currently pullable.
+ * Selection only considers the FRONT WINDOW of the deck so we don't reorder the
+ * whole sequence — just gently prefer useful colors over the next few entries.
+ * Weight: pullable=PULLABLE_WEIGHT, others=1. */
+const QUEUE_WEIGHT_PULLABLE = 2.5;   // mild bias, not overwhelming
+const QUEUE_WEIGHT_WINDOW   = 4;     // look at next 4 entries when refilling
+function pickWeightedDeckIndex() {
+  if (Game.deck.length === 0) return -1;
+  if (Game.deck.length === 1) return 0;
+  const pullable = Game.woolGrid?.pullableColors?.() || new Set();
+  const N = Math.min(QUEUE_WEIGHT_WINDOW, Game.deck.length);
+  const weights = [];
+  let total = 0;
+  for (let i = 0; i < N; i++) {
+    const w = pullable.has(Game.deck[i].color) ? QUEUE_WEIGHT_PULLABLE : 1;
+    weights.push(w);
+    total += w;
+  }
+  let pick = Math.random() * total;
+  for (let i = 0; i < N; i++) {
+    pick -= weights[i];
+    if (pick <= 0) return i;
+  }
+  return 0;
+}
+
+function refillQueue(skipAnim = false) {
+  while (Game.queue.length < QUEUE_VISIBLE_MAX && Game.deck.length > 0) {
+    const idx = pickWeightedDeckIndex();
+    const [spec] = Game.deck.splice(idx, 1);
+    const b = new Bobbin(spec.color, spec.count);
+    const col = pickQueueColumnForNewEntry();
+    const entry = { bobbin: b, col };
+    Game.queue.push(entry);
+    Game.layers.bobbin.addChild(b.gfx);
+    if (!skipAnim) {
+      // Will be positioned by refreshQueueLayout; start off-screen for entry anim
+      b.gfx.x = Layout.queuePos(col, 99).x;
+      b.gfx.y = Layout.H + Layout.queue.size;
+      b.gfx._queueEntering = true;
+      b.gfx.alpha = 0;
+      // Final position depends on its row, computed in refreshQueueLayout. We snapshot here.
+      const finalPos = Layout.queuePos(col, currentRowInCol(col, entry));
+      addAnim(0.24, (eu) => {
+        b.gfx.alpha = eu;
+        b.gfx.y = lerp(Layout.H + Layout.queue.size, finalPos.y, eu);
+      }, () => {
+        b.gfx._queueEntering = false;
+        b.gfx.y = finalPos.y;
+      });
+    }
+  }
+  refreshQueueLayout(skipAnim ? 0 : 0.22);
+}
+
+/* Find the row this entry occupies within its column (0 = top). */
+function currentRowInCol(col, targetEntry) {
+  let row = 0;
+  for (const e of Game.queue) {
+    if (e.col !== col) continue;
+    if (e === targetEntry) return row;
+    row++;
+  }
+  return row;
+}
+
+function refreshQueueLayout(duration = 0.18) {
+  // Each column maintains an independent stack. Row = position within column.
+  const cols = Layout.queue.cols;
+  const colCounters = new Array(cols).fill(0);
+  for (let k = 0; k < Game.queue.length; k++) {
+    const entry = Game.queue[k];
+    const col = entry.col;
+    const row = colCounters[col]++;
+    entry.row = row;
+    const p = Layout.queuePos(col, row);
+    const b = entry.bobbin;
+    b.gfx.removeAllListeners('pointerdown');
+    const idxAtBind = k;
+    b.gfx.on('pointerdown', () => onClickQueue(idxAtBind));
+    if (b.gfx._queueEntering) continue;
+    if (duration > 0) tweenTo(b.gfx, p.x, p.y, duration);
+    else { b.gfx.x = p.x; b.gfx.y = p.y; }
+  }
+}
+
+/* =========================================================================
+ *  Game logic
+ * ========================================================================= */
+function totalRemainingBobbins() {
+  let n = 0;
+  n += Game.deck.length;
+  n += Game.queue.length;
+  for (const s of Game.slots) if (s) n++;
+  n += Game.rail.length;
+  // also pending-launch (in flight)
+  for (const c of Game.inFlightCarriers) if (c.phase === 'launching' && c.bobbin) n++;
+  return n;
+}
+
+function isBoostActive() {
+  return totalRemainingBobbins() <= GameTune.boost.triggerThreshold;
+}
+
+function speedMul() {
+  return isBoostActive() ? GameTune.rail.boostMultiplier : 1.0;
+}
+
+function onClickQueue(i) {
+  if (Game.paused || Game.ended) return;
+  if (window.EditorTool && EditorTool.mode === 'edit') return;
+  if (Game.clickCooldownT > 0) return;
+  if (Game.dumpCount <= 0) return;
+  if (i < 0 || i >= Game.queue.length) return;
+  const entry = Game.queue[i];
+  if (!entry) return;
+  AudioSystem.unlock();
+  // Remove from queue
+  Game.queue.splice(i, 1);
+  refreshQueueLayout(0.2);
+  launchBobbin(entry.bobbin);
+  refillQueue(false);
+}
+
+function onClickSlot(i) {
+  if (Game.paused || Game.ended) return;
+  if (window.EditorTool && EditorTool.mode === 'edit') return;
+  if (Game.clickCooldownT > 0) return;
+  if (Game.dumpCount <= 0) return;
+  const slot = Game.slots[i];
+  if (!slot) return;
+  AudioSystem.unlock();
+  Game.slots[i] = null;
+  launchBobbin(slot.bobbin);
+}
+
+function launchBobbin(bobbin) {
+  Game.clickCooldownT = GameTune.rail.clickCooldown;
+  Game.dumpCount -= 1;
+  updateCounter();
+  redrawDump();
+  AudioSystem.launch(bobbin.color);
+
+  // Phase 1: spawn carrier from dump (starts upright like a card) and slide it to 7-o'clock.
+  const carrier = new Carrier('upright');
+  carrier.gfx.x = Layout.dump.x;
+  carrier.gfx.y = Layout.dump.y;
+  Game.layers.carrier.addChild(carrier.gfx);
+
+  const startPos = RailPath.position(0);
+  spawnLaunchGlow(startPos.x, startPos.y, bobbin.color);
+
+  // Bobbin: float up to carrier
+  bobbin.gfx.removeAllListeners('pointerdown');
+  // re-parent bobbin if needed
+  if (bobbin.gfx.parent !== Game.layers.bobbin) Game.layers.bobbin.addChild(bobbin.gfx);
+  const bobbinStart = { x: bobbin.gfx.x, y: bobbin.gfx.y };
+
+  const flight = {
+    phase: 'launching',
+    t: 0,
+    duration: GameTune.visual.bobbinEnterRail,
+    carrier,
+    bobbin,
+    fromCarrierPos: { x: Layout.dump.x, y: Layout.dump.y },
+    trayBoardPos: {
+      x: Layout.dump.x + Layout.bobbinSize * 1.05,
+      y: Layout.dump.y + Layout.bobbinSize * 0.38,
+    },
+    toRailT: 0,
+    bobbinFrom: bobbinStart,
+    railStart: startPos,
+    bobbinLaid: false,
+  };
+  Game.inFlightCarriers.push(flight);
+}
+
+/* Animation system: register an anim with onUpdate(easedU, rawU) + optional onDone */
+function addAnim(duration, onUpdate, onDone) {
+  Game.anims.push({ t: 0, dur: duration, onUpdate, onDone, finished: false });
+}
+function tickAnims(dt) {
+  for (let i = Game.anims.length - 1; i >= 0; i--) {
+    const a = Game.anims[i];
+    if (a.finished) { Game.anims.splice(i, 1); continue; }
+    a.t += dt;
+    const u = clamp(a.t / a.dur, 0, 1);
+    const eu = easeOutCubic(u);
+    try { a.onUpdate?.(eu, u); } catch (e) { console.warn('anim onUpdate error', e); }
+    if (u >= 1) {
+      a.finished = true;
+      try { a.onDone?.(); } catch (e) { console.warn('anim onDone error', e); }
+      Game.anims.splice(i, 1);
+    }
+  }
+}
+
+function tweenTo(obj, x, y, duration) {
+  const sx = obj.x, sy = obj.y;
+  addAnim(duration, (eu) => {
+    obj.x = lerp(sx, x, eu);
+    obj.y = lerp(sy, y, eu);
+  });
+}
+
+function easeOutCubic(u) { return 1 - Math.pow(1 - u, 3); }
+function easeInOutQuad(u) { return u < 0.5 ? 2 * u * u : 1 - Math.pow(-2 * u + 2, 2) / 2; }
+function phaseEase(u, start, end) {
+  return easeInOutQuad(clamp((u - start) / Math.max(0.0001, end - start), 0, 1));
+}
+
+/* --- Rail entry handling --- */
+function spawnRailEntry(carrier, bobbin) {
+  // Determine starting t such that it leaves a 1-cell gap behind the most-recent bobbin on rail
+  let startT = 0;
+  if (Game.rail.length > 0) {
+    startT = 0;
+  }
+  // Bobbin switches to LYING orientation when placed on rail
+  if (bobbin.setOrientation) bobbin.setOrientation('lying');
+  // Ensure carrier is fully laid down by the time it joins the rail.
+  if (carrier.setOrientation) carrier.setOrientation('lying', true);
+  const entry = {
+    bobbin, carrier,
+    t: startT,
+    lapsCompleted: 0,
+    lastPullKey: null,
+    persistent: false,
+    finished: false,
+  };
+  Game.rail.push(entry);
+  // Place carrier and bobbin on rail
+  const pos = RailPath.position(startT);
+  carrier.gfx.x = pos.x;
+  carrier.gfx.y = pos.y;
+  carrier.gfx.rotation = pos.angle;
+  bobbin.gfx.x = pos.x;
+  bobbin.gfx.y = pos.y;
+}
+
+function tickRail(dt) {
+  if (Game.rail.length === 0) return;
+  const lap = GameTune.rail.lapDuration / speedMul();
+  const dT = dt / lap;
+
+  // Sort by t descending so removals don't break iteration
+  for (let i = Game.rail.length - 1; i >= 0; i--) {
+    const e = Game.rail[i];
+    const newT = e.t + dT;
+    const crossedLap = newT >= 1.0;
+    if (crossedLap) {
+      e.lapsCompleted += 1;
+      // boost-mode persistence check
+      if (isBoostActive()) {
+        e.persistent = true;
+      }
+      if (!e.persistent) {
+        // End of lap: handle return
+        finishLap(e);
+        continue;
+      } else {
+        // Keep going (boost mode loop)
+        e.t = newT - 1.0;
+      }
+    } else {
+      e.t = newT;
+    }
+    // Move bobbin + carrier
+    const pos = RailPath.position(e.t);
+    e.carrier.gfx.x = pos.x;
+    e.carrier.gfx.y = pos.y;
+    e.carrier.gfx.rotation = pos.angle + deg2rad(EditorTune.trayLaunchedRotationDeg);
+    e.bobbin.gfx.x = pos.x;
+    e.bobbin.gfx.y = pos.y;
+    // Bobbin follows the carrier direction (+ optional tuneable offset)
+    e.bobbin.gfx.rotation = pos.angle + deg2rad(EditorTune.bobbinRailRotationDeg);
+    // Keep label upright (counter-rotate the bobbin's parent rotation)
+    if (e.bobbin.badgeGroup) e.bobbin.badgeGroup.rotation = -(pos.angle + deg2rad(EditorTune.bobbinRailRotationDeg));
+
+    // Pull check (only on straight side, when cell changes)
+    if (pos.side !== 'corner') {
+      const key = `${pos.side}:${pos.cellIndex}`;
+      if (e.lastPullKey !== key) {
+        e.lastPullKey = key;
+        tryPull(e, pos);
+      }
+    } else {
+      e.lastPullKey = null;
+    }
+
+    e.bobbin.update(dt);
+
+    if (e.bobbin.count <= 0) {
+      // Bobbin done — fly carrier back fast
+      finishBobbinExhausted(e);
+      continue;
+    }
+  }
+}
+
+function tryPull(entry, pos) {
+  const grid = Game.woolGrid;
+  const N = PATTERN.width;
+  const cell = pos.cellIndex;
+  if (cell == null) return;
+  let target = null;
+  // CCW direction mapping:
+  switch (pos.side) {
+    case 'bottom': {
+      // Bottom goes left→right; cellIndex 0 = col 0
+      const col = cell;
+      target = grid.pullFromCol(entry.bobbin.color, col, 'bottom');
+      break;
+    }
+    case 'right': {
+      // Right goes bottom→top; cellIndex 0 = row (N-1)
+      const row = (N - 1) - cell;
+      target = grid.pullFromRow(entry.bobbin.color, row, 'right');
+      break;
+    }
+    case 'top': {
+      // Top goes right→left; cellIndex 0 = col (N-1)
+      const col = (N - 1) - cell;
+      target = grid.pullFromCol(entry.bobbin.color, col, 'top');
+      break;
+    }
+    case 'left': {
+      // Left goes top→bottom; cellIndex 0 = row 0
+      const row = cell;
+      target = grid.pullFromRow(entry.bobbin.color, row, 'left');
+      break;
+    }
+  }
+  if (target) {
+    const pulledColor = entry.bobbin.color;
+    entry.bobbin.decrement(1);
+    entry.bobbin.pulse();
+    HapticThrottle.light();
+    AudioSystem.pull(pulledColor);
+    // Curved-thread FX
+    const cellPos = Layout.cellCenter(target.row, target.col);
+    spawnPullThread(cellPos, entry);
+    if (!Game.clearedColors.has(pulledColor) && grid.remainingByColor(pulledColor) === 0) {
+      Game.clearedColors.add(pulledColor);
+      spawnColorClearPulse(pulledColor);
+      HapticThrottle.medium();
+      AudioSystem.colorClear(pulledColor);
+    }
+    // win check
+    if (grid.remainingTotal() === 0) doWin();
+  }
+}
+
+/* Pull-thread fx — thin yarn strand drawn with PIXI.Graphics curves.
+ * Matches reference: a thin colored line, slight sag, natural curve from cell
+ * to the moving bobbin. No texture needed at this thin scale. */
+
+function spawnPullThread(cellPos, entry) {
+  const pal = WOOL[entry.bobbin.color];
+  // Reuse the existing thread for this bobbin so only ONE strand is ever visible
+  // at a time. Move its origin to the latest pulled cell and reset its life so
+  // it fades fresh from that anchor.
+  const existing = Game.pullFx.find(fx => fx.entry === entry);
+  if (existing) {
+    existing.start.x = cellPos.x;
+    existing.start.y = cellPos.y;
+    existing.pal = pal;
+    existing.t = 0;
+    existing.wobblePhase = Math.random() * Math.PI * 2;
+    existing.sagSign = Math.random() < 0.5 ? -1 : 1;
+    return;
+  }
+  const visual = new PIXI.Graphics();
+  Game.layers.thread.addChild(visual);
+  Game.pullFx.push({
+    t: 0,
+    dur: 0.55,
+    g: visual,
+    start: { x: cellPos.x, y: cellPos.y },
+    entry,
+    pal,
+    wobblePhase: Math.random() * Math.PI * 2,
+    sagSign: Math.random() < 0.5 ? -1 : 1,
+  });
+}
+
+function tickPullFx(dt) {
+  for (let i = Game.pullFx.length - 1; i >= 0; i--) {
+    const fx = Game.pullFx[i];
+    const bgfx = fx.entry.bobbin.gfx;
+    if (!bgfx || bgfx.destroyed) {
+      if (fx.g.parent) fx.g.parent.removeChild(fx.g);
+      if (!fx.g.destroyed) fx.g.destroy();
+      Game.pullFx.splice(i, 1);
+      continue;
+    }
+    fx.t += dt;
+    const u = clamp(fx.t / fx.dur, 0, 1);
+
+    const sx = fx.start.x, sy = fx.start.y;
+    // Bobbin end follows the bobbin (which keeps moving along the rail).
+    const bx = bgfx.x, by = bgfx.y;
+
+    // Sag direction (perpendicular to the line)
+    const dx = bx - sx, dy = by - sy;
+    const len = Math.hypot(dx, dy) || 1;
+    const nx = -dy / len, ny = dx / len;
+
+    // Sag amplitude — peak in middle of life, with subtle wobble
+    const sagBase = Math.min(len * 0.18, 30);
+    const sagEnv = Math.sin(u * Math.PI);  // 0 → peak at 0.5 → 0
+    const wobble = Math.sin(fx.t * 14 + fx.wobblePhase) * 3;
+    const sag = (sagBase * sagEnv + wobble) * fx.sagSign;
+
+    const mx = (sx + bx) / 2 + nx * sag;
+    const my = (sy + by) / 2 + ny * sag;
+
+    // Fade in over first 10%, opaque mid-life, fade out over last 20%
+    const fadeIn = clamp(u / 0.10, 0, 1);
+    const fadeOut = u < 0.80 ? 1 : clamp(1 - (u - 0.80) / 0.20, 0, 1);
+    const alpha = fadeIn * fadeOut;
+
+    // Thin yarn strand — single colored line scaled to ~2-3 px
+    const wMain = Math.max(2, Layout.cellSize * 0.18);
+    const wShadow = wMain + 1.4;
+    const wHighlight = Math.max(1, wMain * 0.45);
+
+    fx.g.clear();
+    // Soft shadow underneath
+    fx.g.lineStyle({ width: wShadow, color: fx.pal.dark, alpha: alpha * 0.45, cap: PIXI.LINE_CAP.ROUND });
+    fx.g.moveTo(sx, sy);
+    fx.g.quadraticCurveTo(mx, my, bx, by);
+    // Main yarn color
+    fx.g.lineStyle({ width: wMain, color: fx.pal.fill, alpha: alpha, cap: PIXI.LINE_CAP.ROUND });
+    fx.g.moveTo(sx, sy);
+    fx.g.quadraticCurveTo(mx, my, bx, by);
+    // Highlight (slightly offset)
+    fx.g.lineStyle({ width: wHighlight, color: fx.pal.light, alpha: alpha * 0.85, cap: PIXI.LINE_CAP.ROUND });
+    fx.g.moveTo(sx + nx * 0.4, sy + ny * 0.4);
+    fx.g.quadraticCurveTo(mx + nx * 0.4, my + ny * 0.4, bx + nx * 0.4, by + ny * 0.4);
+
+    if (u >= 1) {
+      if (fx.g.parent) fx.g.parent.removeChild(fx.g);
+      if (!fx.g.destroyed) fx.g.destroy();
+      Game.pullFx.splice(i, 1);
+    }
+  }
+}
+
+function drawMiniKnot(g, x, y, r, pal, alpha = 1) {
+  g.lineStyle({ width: Math.max(1.5, r * 0.52), color: pal.dark, alpha: alpha * 0.35, cap: PIXI.LINE_CAP.ROUND });
+  g.moveTo(x - r, y - r * 0.58); g.lineTo(x + r, y + r * 0.58);
+  g.moveTo(x + r, y - r * 0.58); g.lineTo(x - r, y + r * 0.58);
+  g.lineStyle({ width: Math.max(1.2, r * 0.40), color: pal.fill, alpha, cap: PIXI.LINE_CAP.ROUND });
+  g.moveTo(x - r, y - r * 0.58); g.lineTo(x + r, y + r * 0.58);
+  g.moveTo(x + r, y - r * 0.58); g.lineTo(x - r, y + r * 0.58);
+}
+
+function drawFourPointSpark(g, x, y, r, color, alpha = 1, rot = 0) {
+  g.beginFill(color, alpha);
+  g.moveTo(x + Math.cos(rot) * r, y + Math.sin(rot) * r);
+  for (let i = 1; i < 8; i++) {
+    const a = rot + i * Math.PI / 4;
+    const rr = i % 2 === 0 ? r : r * 0.28;
+    g.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr);
+  }
+  g.closePath();
+  g.endFill();
+}
+
+/* --- Lap end behaviors --- */
+function finishLap(entry) {
+  if (entry.finished) return;
+  entry.finished = true;
+  // Bobbin still has count > 0 → seek free slot
+  const idx = Game.rail.indexOf(entry);
+  if (idx >= 0) Game.rail.splice(idx, 1);
+
+  const freeSlot = Game.slots.findIndex(s => s === null);
+  if (freeSlot < 0) {
+    // GAME OVER
+    doFail(entry);
+    return;
+  }
+  // Move bobbin to slot — switch back to upright orientation
+  const slotPos = Layout.slotPos(freeSlot);
+  const bb = entry.bobbin;
+  const sx = bb.gfx.x, sy = bb.gfx.y;
+  const sr = bb.gfx.rotation;
+  if (bb.setOrientation) bb.setOrientation('upright');
+  const dur = GameTune.visual.bobbinJumpToSlot;
+  addAnim(dur, (eu, u) => {
+    const arc = Math.sin(u * Math.PI) * 40;
+    bb.gfx.x = lerp(sx, slotPos.x, eu);
+    bb.gfx.y = lerp(sy, slotPos.y, eu) - arc;
+    // Smoothly rotate label/sprite back to 0 (upright)
+    bb.gfx.rotation = lerp(sr, 0, eu);
+    if (bb.badgeGroup) bb.badgeGroup.rotation = lerp(-sr, 0, eu);
+  }, () => {
+    bb.gfx.x = slotPos.x; bb.gfx.y = slotPos.y;
+    bb.gfx.rotation = 0;
+    if (bb.badgeGroup) bb.badgeGroup.rotation = 0;
+    Game.slots[freeSlot] = { bobbin: bb };
+    bb.gfx.on('pointerdown', () => onClickSlot(freeSlot));
+    HapticThrottle.light();
+    AudioSystem.slot();
+  });
+
+  // Carrier slides down through rail and returns to back of dump (slow)
+  returnCarrierToDump(entry.carrier, GameTune.visual.carrierReturnSlow);
+}
+
+function finishBobbinExhausted(entry) {
+  if (entry.finished) return;
+  entry.finished = true;
+  const idx = Game.rail.indexOf(entry);
+  if (idx >= 0) Game.rail.splice(idx, 1);
+
+  // Carrier is freed immediately (counter +1)
+  Game.dumpCount += 1;
+  updateCounter();
+  redrawDump();
+
+  // Sparkle at the spot where the bobbin exhausted
+  const x = entry.bobbin.gfx.x;
+  const y = entry.bobbin.gfx.y;
+  spawnSparkle(x, y);
+  AudioSystem.pop();
+
+  // Fade out bobbin + carrier in place, slight scale-up, then destroy
+  const bgfx = entry.bobbin.gfx;
+  const cgfx = entry.carrier.gfx;
+  addAnim(0.35, (eu) => {
+    if (!bgfx.destroyed) { bgfx.alpha = 1 - eu; bgfx.scale.set(1 + eu * 0.25); }
+    if (!cgfx.destroyed) { cgfx.alpha = 1 - eu; cgfx.scale.set(1 + eu * 0.25); }
+  }, () => {
+    if (bgfx.parent) bgfx.parent.removeChild(bgfx);
+    if (!bgfx.destroyed) bgfx.destroy({ children: true });
+    if (cgfx.parent) cgfx.parent.removeChild(cgfx);
+    if (!cgfx.destroyed) cgfx.destroy({ children: true });
+  });
+}
+
+function spawnLaunchGlow(x, y, color) {
+  const pal = WOOL[color] || WOOL.blue;
+  const g = new PIXI.Graphics();
+  Game.layers.fx.addChild(g);
+  g.x = x; g.y = y;
+  const dur = 0.42;
+  addAnim(dur, (eu, u) => {
+    g.clear();
+    const a = 1 - eu;
+    const r = lerp(Layout.bobbinSize * 0.45, Layout.bobbinSize * 1.25, eu);
+    g.beginFill(pal.light, a * 0.16);
+    g.drawCircle(0, 0, r);
+    g.endFill();
+    g.lineStyle(2, 0xffffff, a * 0.78);
+    g.drawCircle(0, 0, r * 0.86);
+    for (let i = 0; i < 7; i++) {
+      const ang = i * 2.399 + u * 2.2;
+      const rr = r * (0.35 + (i % 3) * 0.18);
+      drawFourPointSpark(g, Math.cos(ang) * rr, Math.sin(ang) * rr, Layout.cellSize * 0.18, 0xffffff, a * 0.8, ang);
+    }
+  }, () => {
+    if (g.parent) g.parent.removeChild(g);
+    if (!g.destroyed) g.destroy();
+  });
+}
+
+function spawnColorClearPulse(color) {
+  const pal = WOOL[color] || WOOL.blue;
+  const g = new PIXI.Graphics();
+  Game.layers.fx.addChild(g);
+  const L = Layout.hoop;
+  const dur = 0.52;
+  addAnim(dur, (eu) => {
+    g.clear();
+    const a = 1 - eu;
+    const pad = lerp(0, L.rim * 0.32, eu);
+    g.lineStyle(Math.max(4, L.rim * 0.10), pal.light, a * 0.34);
+    g.drawRoundedRect(
+      L.cx - L.innerHalf - pad,
+      L.cy - L.innerHalf - pad,
+      L.innerHalf * 2 + pad * 2,
+      L.innerHalf * 2 + pad * 2,
+      L.cornerRadius * 0.42 + pad
+    );
+    g.lineStyle(2, 0xffffff, a * 0.8);
+    g.drawRoundedRect(
+      L.cx - L.innerHalf - pad * 0.35,
+      L.cy - L.innerHalf - pad * 0.35,
+      L.innerHalf * 2 + pad * 0.7,
+      L.innerHalf * 2 + pad * 0.7,
+      L.cornerRadius * 0.38 + pad * 0.5
+    );
+  }, () => {
+    if (g.parent) g.parent.removeChild(g);
+    if (!g.destroyed) g.destroy();
+  });
+}
+
+function spawnBoostPulse() {
+  const g = new PIXI.Graphics();
+  Game.layers.fx.addChild(g);
+  const L = Layout.hoop;
+  addAnim(0.72, (eu) => {
+    g.clear();
+    const a = 1 - eu;
+    const pad = lerp(L.rim * 0.05, L.rim * 0.55, eu);
+    g.lineStyle(Math.max(5, L.rim * 0.10), 0xffffff, a * 0.72);
+    g.drawRoundedRect(
+      L.cx - L.outerHalf - pad,
+      L.cy - L.outerHalf - pad,
+      L.outerHalf * 2 + pad * 2,
+      L.outerHalf * 2 + pad * 2,
+      L.cornerRadius + pad
+    );
+  }, () => {
+    if (g.parent) g.parent.removeChild(g);
+    if (!g.destroyed) g.destroy();
+  });
+}
+
+function spawnWinBurst() {
+  const g = new PIXI.Graphics();
+  Game.layers.fx.addChild(g);
+  const L = Layout.hoop;
+  const particles = Array.from({ length: 54 }, (_, i) => {
+    const a = (i / 54) * Math.PI * 2;
+    const speed = Layout.hoop.innerHalf * (0.25 + (i % 7) * 0.028);
+    return {
+      x: L.cx + Math.cos(a * 1.7) * L.innerHalf * 0.2,
+      y: L.cy + Math.sin(a * 1.3) * L.innerHalf * 0.2,
+      vx: Math.cos(a) * speed,
+      vy: Math.sin(a) * speed - Layout.hoop.innerHalf * 0.12,
+      r: Layout.cellSize * (0.16 + (i % 4) * 0.05),
+      color: [0xffffff, WOOL.blue.light, WOOL.orange.light, WOOL.red.light][i % 4],
+      rot: i * 0.61,
+    };
+  });
+  addAnim(1.25, (eu, u) => {
+    g.clear();
+    for (const p of particles) {
+      const x = p.x + p.vx * u;
+      const y = p.y + p.vy * u + Layout.hoop.innerHalf * 0.75 * u * u;
+      const a = Math.max(0, 1 - u);
+      drawFourPointSpark(g, x, y, p.r * (1 + u * 0.6), p.color, a, p.rot + u * 4);
+    }
+  }, () => {
+    if (g.parent) g.parent.removeChild(g);
+    if (!g.destroyed) g.destroy();
+  });
+}
+
+/* Sparkle / bubble effect at (x, y) — used when bobbin exhausts in place. */
+function spawnSparkle(x, y) {
+  const g = new PIXI.Graphics();
+  Game.layers.fx.addChild(g);
+  g.x = x; g.y = y;
+  const dur = 0.55;
+  addAnim(dur, (eu, u) => {
+    g.clear();
+    const r = lerp(Layout.bobbinSize * 0.4, Layout.bobbinSize * 1.6, eu);
+    const a = 1 - eu;
+    // outer translucent bubble
+    g.beginFill(0xffffff, a * 0.30);
+    g.drawCircle(0, 0, r);
+    g.endFill();
+    // inner rim
+    g.lineStyle(2, 0xffffff, a * 0.85);
+    g.drawCircle(0, 0, r * 0.95);
+    // 4 sparkle spikes
+    g.lineStyle(3, 0xffffff, a);
+    const spikeLen = r * 0.5;
+    for (let i = 0; i < 4; i++) {
+      const ang = i * Math.PI / 2 + Math.PI / 4;
+      g.moveTo(Math.cos(ang) * r * 0.4, Math.sin(ang) * r * 0.4);
+      g.lineTo(Math.cos(ang) * (r * 0.4 + spikeLen), Math.sin(ang) * (r * 0.4 + spikeLen));
+    }
+    for (let i = 0; i < 9; i++) {
+      const ang = i * 2.15 + u * 1.8;
+      const rr = r * (0.52 + (i % 3) * 0.18);
+      drawFourPointSpark(g, Math.cos(ang) * rr, Math.sin(ang) * rr, Layout.cellSize * 0.20, 0xffffff, a * 0.9, ang);
+    }
+  }, () => {
+    if (g.parent) g.parent.removeChild(g);
+    if (!g.destroyed) g.destroy();
+  });
+}
+
+function returnCarrierToDump(carrier, duration) {
+  const sx = carrier.gfx.x, sy = carrier.gfx.y;
+  const sr = carrier.gfx.rotation;
+  const tx = Layout.dump.x, ty = Layout.dump.y;
+  addAnim(duration, (eu, u) => {
+    carrier.gfx.x = lerp(sx, tx, eu);
+    carrier.gfx.y = lerp(sy, ty, eu);
+    carrier.gfx.rotation = lerp(sr, 0, eu);
+    if (carrier.applyFade) carrier.applyFade('lying', 'upright', u);
+  }, () => {
+    if (carrier.gfx.parent) carrier.gfx.parent.removeChild(carrier.gfx);
+    if (!carrier.gfx.destroyed) carrier.gfx.destroy({ children: true });
+    Game.dumpCount += 1;
+    updateCounter();
+    redrawDump();
+  });
+}
+
+/* --- Launch in-flight (queue→rail) --- */
+function tickInFlight(dt) {
+  for (let i = Game.inFlightCarriers.length - 1; i >= 0; i--) {
+    const f = Game.inFlightCarriers[i];
+    if (f.phase === 'launching') {
+      f.t += dt;
+      const u = clamp(f.t / f.duration, 0, 1);
+      const sp = RailPath.position(0);
+      const q = (a, b, c, t) => lerp(lerp(a, b, t), lerp(b, c, t), t);
+      const trayMid = f.trayBoardPos || {
+        x: lerp(f.fromCarrierPos.x, sp.x, 0.45),
+        y: lerp(f.fromCarrierPos.y, sp.y, 0.45),
+      };
+      const trayU = phaseEase(u, 0.14, 0.92);
+      const lieU = phaseEase(u, 0.34, 0.92);
+      f.carrier.gfx.x = q(f.fromCarrierPos.x, trayMid.x, sp.x, trayU);
+      f.carrier.gfx.y = q(f.fromCarrierPos.y, trayMid.y, sp.y, trayU);
+      f.carrier.gfx.rotation = lerp(deg2rad(EditorTune.trayDumpRotationDeg || 0), sp.angle, lieU);
+
+      if (!f.bobbinLaid && u > 0.48) {
+        f.bobbinLaid = true;
+        if (f.bobbin.setOrientation) f.bobbin.setOrientation('lying');
+      }
+      const bobbinU = phaseEase(u, 0.05, 0.95);
+      const bxMid = Math.min(f.bobbinFrom.x, sp.x) - Layout.bobbinSize * 0.22;
+      const byMid = lerp(f.bobbinFrom.y, sp.y, 0.54) + Layout.bobbinSize * 0.10;
+      f.bobbin.gfx.x = q(f.bobbinFrom.x, bxMid, sp.x, bobbinU);
+      f.bobbin.gfx.y = q(f.bobbinFrom.y, byMid, sp.y, bobbinU);
+      const bobbinRot = lerp(0, sp.angle + deg2rad(EditorTune.bobbinRailRotationDeg), phaseEase(u, 0.48, 0.95));
+      f.bobbin.gfx.rotation = bobbinRot;
+      if (f.bobbin.badgeGroup) f.bobbin.badgeGroup.rotation = -bobbinRot;
+      // Cross-fade tray from upright → lying during the launch tween.
+      if (f.carrier.applyFade) f.carrier.applyFade('upright', 'lying', lieU);
+      if (u >= 1) {
+        Game.inFlightCarriers.splice(i, 1);
+        // Add to rail
+        spawnRailEntry(f.carrier, f.bobbin);
+      }
+    }
+  }
+}
+
+/* --- Win/Lose --- */
+function doWin() {
+  if (Game.ended) return;
+  Game.ended = true;
+  spawnWinBurst();
+  showBanner('CLEAR!');
+  HapticThrottle.medium();
+  AudioSystem.win();
+  GameBridge.notifySuccess();
+}
+function doFail(entry) {
+  if (Game.ended) return;
+  Game.ended = true;
+  showBanner('GAME OVER');
+  HapticThrottle.medium();
+  GameBridge.notifyFail();
+}
+function showBanner(text) {
+  const ov = document.getElementById('overlay');
+  const b = document.getElementById('banner');
+  b.textContent = text;
+  ov.classList.add('show');
+}
+
+function onKeyDown(e) {
+  if (e.key?.toLowerCase() === 'f') toggleFullscreen();
+}
+
+function toggleFullscreen() {
+  const root = document.documentElement;
+  if (!document.fullscreenElement) root.requestFullscreen?.();
+  else document.exitFullscreen?.();
+}
+
+function renderGameToText() {
+  const woolByColor = {};
+  for (const color of Object.keys(WOOL)) woolByColor[color] = Game.woolGrid?.remainingByColor(color) || 0;
+  const rail = Game.rail.map((entry) => {
+    const pos = RailPath.position(entry.t);
+    return {
+      color: entry.bobbin.color,
+      count: entry.bobbin.count,
+      t: Number(entry.t.toFixed(3)),
+      side: pos.side,
+      cellIndex: pos.cellIndex,
+      x: Math.round(pos.x),
+      y: Math.round(pos.y),
+    };
+  });
+  return JSON.stringify({
+    coordinates: 'origin top-left, x right, y down, pixels',
+    mode: Game.ended ? 'ended' : (Game.paused ? 'paused' : 'playing'),
+    ended: Game.ended,
+    boost: isBoostActive(),
+    carriers: { available: Game.dumpCount, total: GameTune.carrier.total },
+    wool: { remaining: Game.woolGrid?.remainingTotal() || 0, byColor: woolByColor },
+    deckRemaining: Game.deck.length,
+    queue: Game.queue.map((q, i) => ({ index: i, color: q.bobbin.color, count: q.bobbin.count, x: Math.round(q.bobbin.gfx.x), y: Math.round(q.bobbin.gfx.y) })),
+    slots: Game.slots.map((s, i) => s ? ({ index: i, color: s.bobbin.color, count: s.bobbin.count }) : null),
+    rail,
+    inFlight: Game.inFlightCarriers.length,
+  });
+}
+
+function advanceTime(ms) {
+  const steps = Math.max(1, Math.round(ms / (1000 / 60)));
+  const wasPaused = Game.paused;
+  Game.paused = false;
+  for (let i = 0; i < steps; i++) tick(1);
+  Game.paused = wasPaused;
+  Game.app?.renderer.render(Game.app.stage);
+}
+
+/* =========================================================================
+ *  Editor (live-tune visual parameters)
+ * ========================================================================= */
+function initEditor() {
+  // One-time migration: if a legacy `arrowRadius` value is present (from old saved
+  // configs), copy it to both X and Y.
+  if (typeof EditorTune.arrowRadius === 'number' &&
+      EditorTune.arrowRadiusX === EDITOR_DEFAULTS.arrowRadiusX &&
+      EditorTune.arrowRadiusY === EDITOR_DEFAULTS.arrowRadiusY) {
+    EditorTune.arrowRadiusX = EditorTune.arrowRadius;
+    EditorTune.arrowRadiusY = EditorTune.arrowRadius;
+    delete EditorTune.arrowRadius;
+  }
+
+  EditorTool.init();
+  MapTool.init();
+  initResourceUpload();
+  initSessionPatternBanner();
+}
+
+function initSessionPatternBanner() {
+  if (!sessionStorage.getItem('wooloop_test_pattern')) return;
+  const banner = document.createElement('div');
+  banner.style.cssText = 'position:fixed;top:8px;left:50%;transform:translateX(-50%);z-index:1001;background:rgba(60,120,200,0.95);color:#fff;padding:6px 12px;border-radius:18px;font-size:11.5px;font-weight:600;box-shadow:0 2px 6px rgba(0,0,0,0.3);display:flex;gap:8px;align-items:center';
+  banner.innerHTML = `<span>🧪 테스트 패턴 적용중 (${PATTERN.width}×${PATTERN.height})</span><button style="background:#fff3;border:0;color:#fff;padding:3px 8px;border-radius:10px;cursor:pointer;font-size:11px">원본으로</button>`;
+  banner.querySelector('button').addEventListener('click', () => {
+    sessionStorage.removeItem('wooloop_test_pattern');
+    location.reload();
+  });
+  document.body.appendChild(banner);
+}
+
+/* =========================================================================
+ *  EditorTool — Unity-style gizmo editor.
+ *  Replaces the legacy slider-based UI. Drag in the field to translate / scale /
+ *  rotate the selected asset; press W / E / R to switch tool. Selection works
+ *  via left panel list OR by clicking the asset directly in the canvas.
+ * ========================================================================= */
+const EditorTool = {
+  mode: 'play',           // 'play' | 'edit'
+  selectedId: null,
+  gizmoMode: 'select',    // 'select' | 'translate' | 'scale' | 'rotate'
+  rotAxis: 'z',           // 'x' | 'y' | 'z' (rotate mode only)
+  drag: null,
+  gizmoGfx: null,
+  assets: null,
+  needsRedraw: false,
+
+  init() {
+    this.assets = buildEditorAssetRegistry();
+
+    // Gizmo overlay layer
+    this.gizmoGfx = new PIXI.Graphics();
+    Game.app.stage.addChild(this.gizmoGfx);
+
+    // Top-left mode dropdown
+    const modeSel = document.getElementById('app-mode-select');
+    const lastMode = localStorage.getItem('wooloop_app_mode') || 'play';
+    modeSel.value = lastMode;
+    modeSel.addEventListener('change', () => {
+      this.setMode(modeSel.value);
+      // Drop focus so subsequent W/E/R/Q keystrokes go to the document, not the
+      // <select> (which would treat them as option-jump shortcuts).
+      modeSel.blur();
+    });
+
+    // Asset list
+    const listEl = document.getElementById('asset-list');
+    listEl.innerHTML = '';
+    for (const a of this.assets) {
+      const li = document.createElement('li');
+      li.dataset.assetId = a.id;
+      const tag = a.is3D ? '<span class="tag">3D</span>' : '<span class="tag">2D</span>';
+      li.innerHTML = `${a.name}${tag}`;
+      li.addEventListener('click', (e) => { e.stopPropagation(); this.select(a.id); });
+      listEl.appendChild(li);
+    }
+
+    // Gizmo mode buttons (W / E / R)
+    document.querySelectorAll('.gizmo-bar button[data-gizmo]').forEach(btn => {
+      btn.addEventListener('click', () => this.setGizmoMode(btn.dataset.gizmo));
+    });
+
+    // Tool tab bar (map | upload)
+    document.querySelectorAll('button[data-tool-tab]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('button[data-tool-tab]').forEach(b =>
+          b.classList.toggle('active', b === btn));
+        document.querySelectorAll('[data-tool-section]').forEach(sec => {
+          sec.hidden = (sec.dataset.toolSection !== btn.dataset.toolTab);
+        });
+        if (btn.dataset.toolTab === 'map') MapTool.onShow();
+      });
+    });
+
+    // Save / Reset / Export
+    document.getElementById('ed-save').addEventListener('click', () => {
+      try {
+        localStorage.setItem('wooloop_editor_tune', JSON.stringify(EditorTune));
+        flashEditorMessage('저장됨 ✓');
+      } catch (err) { flashEditorMessage('저장 실패: ' + err.message); }
+    });
+    document.getElementById('ed-reset').addEventListener('click', () => {
+      if (!confirm('모든 값을 기본값으로 되돌립니다. 진행할까요?')) return;
+      localStorage.removeItem('wooloop_editor_tune');
+      Object.assign(EditorTune, EDITOR_DEFAULTS);
+      // Object.assign copies the array reference; detach so future edits don't
+      // mutate EDITOR_DEFAULTS.layerOrder.
+      EditorTune.layerOrder = DEFAULT_LAYER_ORDER.slice();
+      applyAllEditorChanges();
+      this.refreshInspector();
+      flashEditorMessage('기본값 복원 ✓');
+    });
+    document.getElementById('ed-export').addEventListener('click', async () => {
+      const json = JSON.stringify(EditorTune, null, 2);
+      try {
+        await navigator.clipboard.writeText(json);
+        flashEditorMessage('JSON 복사됨 ✓');
+      } catch (err) { prompt('JSON (복사하세요):', json); }
+    });
+
+    // Keyboard
+    window.addEventListener('keydown', (e) => this.onKey(e));
+
+    // Pointer events on canvas — captured at window level so we run before
+    // any sprite-level pixi listeners (we cancel default & stopPropagation in
+    // edit mode so game clicks like onClickQueue don't fire).
+    const view = Game.app.view;
+    view.addEventListener('pointerdown', (e) => this.onPointerDown(e), true);
+    window.addEventListener('pointermove', (e) => this.onPointerMove(e));
+    window.addEventListener('pointerup', (e) => this.onPointerUp(e));
+
+    // Redraw gizmo each frame (assets move with rail bobbins / layout changes).
+    Game.app.ticker.add(() => {
+      if (this.mode === 'edit') this.drawGizmo();
+    });
+
+    // Apply initial mode (also wires body.editor-mode class)
+    this.setMode(lastMode);
+  },
+
+  setMode(m) {
+    this.mode = m;
+    document.body.classList.toggle('editor-mode', m === 'edit');
+    localStorage.setItem('wooloop_app_mode', m);
+    // Disable PIXI sprite interactivity in edit mode so clicks on bobbins/slots
+    // don't fire game actions (launch / pick) while the user is trying to
+    // select & drag them. Re-enable when returning to play.
+    if (Game?.app?.stage) {
+      Game.app.stage.eventMode = m === 'edit' ? 'none' : 'auto';
+    }
+    if (m === 'play') {
+      this.gizmoGfx.clear();
+    } else {
+      this.refreshInspector();
+    }
+  },
+
+  setGizmoMode(m) {
+    this.gizmoMode = m;
+    document.querySelectorAll('.gizmo-bar button[data-gizmo]').forEach(b =>
+      b.classList.toggle('active', b.dataset.gizmo === m));
+    this.refreshInspector();
+  },
+
+  select(id) {
+    this.selectedId = id;
+    document.querySelectorAll('#asset-list li').forEach(li =>
+      li.classList.toggle('selected', li.dataset.assetId === id));
+    this.refreshInspector();
+  },
+
+  getAsset(id) { return this.assets.find(a => a.id === id); },
+
+  onKey(e) {
+    if (this.mode !== 'edit') return;
+    const tag = e.target?.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+    // Use e.code (physical key) so the shortcuts still fire under 한글 IME
+    // where e.key would be 'ㅂ' / 'ㅈ' / 'ㄷ' / 'ㄱ'.
+    switch (e.code) {
+      case 'KeyQ': this.setGizmoMode('select'); e.preventDefault(); break;
+      case 'KeyW': this.setGizmoMode('translate'); e.preventDefault(); break;
+      case 'KeyE': this.setGizmoMode('scale'); e.preventDefault(); break;
+      case 'KeyR': this.setGizmoMode('rotate'); e.preventDefault(); break;
+      case 'Escape': this.select(null); break;
+    }
+  },
+
+  hitTest(x, y) {
+    // Prefer the smaller asset when multiple bounds overlap (foreground wins).
+    let bestId = null;
+    let bestArea = Infinity;
+    for (const a of this.assets) {
+      let b;
+      try { b = a.bounds(); } catch (e) { continue; }
+      if (!b || !isFinite(b.x)) continue;
+      if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) {
+        const area = b.w * b.h;
+        if (area < bestArea) { bestArea = area; bestId = a.id; }
+      }
+    }
+    return bestId;
+  },
+
+  // Hit-test the directional arrow handles drawn in translate-mode gizmo.
+  // Returns 'x' if the red horizontal arrow was grabbed, 'y' for green vertical, or null.
+  hitGizmoHandle(x, y) {
+    if (this.mode !== 'edit' || this.gizmoMode !== 'translate' || !this.selectedId) return null;
+    const a = this.getAsset(this.selectedId);
+    if (!a || !a.bindings.pos) return null;
+    let b; try { b = a.bounds(); } catch (_) { return null; }
+    if (!b) return null;
+    const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+    const PAD = 9;
+    // Red X arrow: cx..cx+50 horizontal
+    if (a.bindings.pos.xKey &&
+        x >= cx - 4 && x <= cx + 55 &&
+        y >= cy - PAD && y <= cy + PAD) return 'x';
+    // Green Y arrow: cy..cy-50 vertical
+    if (a.bindings.pos.yKey &&
+        x >= cx - PAD && x <= cx + PAD &&
+        y >= cy - 55 && y <= cy + 4) return 'y';
+    return null;
+  },
+
+  // Hit-test the Unity-style rotation rings (red X / green Y / blue Z).
+  // Returns the axis whose ring outline is closest to the pointer (within tol).
+  hitRotRing(x, y) {
+    if (this.mode !== 'edit' || this.gizmoMode !== 'rotate' || !this.selectedId) return null;
+    const a = this.getAsset(this.selectedId);
+    if (!a || !a.bindings.rot) return null;
+    let b; try { b = a.bounds(); } catch (_) { return null; }
+    if (!b) return null;
+    const { cx, cy, r } = this.rotRingGeom(b);
+    const dx = x - cx, dy = y - cy;
+    const TOL = 10;
+    // Distance from point to ellipse outline (approximate, scaled by min radius).
+    const distEll = (rx, ry) => {
+      if (rx <= 0 || ry <= 0) return Infinity;
+      const v = Math.sqrt((dx / rx) ** 2 + (dy / ry) ** 2);
+      return Math.abs(v - 1) * Math.min(rx, ry);
+    };
+    const rThin = r * 0.28;
+    const dX = distEll(rThin, r);   // vertical thin ellipse  → X axis
+    const dY = distEll(r, rThin);   // horizontal thin ellipse → Y axis
+    const dZ = distEll(r, r);       // full circle             → Z axis
+    let best = null, bestD = TOL;
+    if (a.bindings.rot.xKey && dX < bestD) { bestD = dX; best = 'x'; }
+    if (a.bindings.rot.yKey && dY < bestD) { bestD = dY; best = 'y'; }
+    if (a.bindings.rot.zKey && dZ < bestD) { bestD = dZ; best = 'z'; }
+    return best;
+  },
+
+  rotRingGeom(b) {
+    const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+    const r = Math.max(60, Math.min(b.w, b.h) * 0.72);
+    return { cx, cy, r };
+  },
+
+  toCanvasCoords(clientX, clientY) {
+    const rect = Game.app.view.getBoundingClientRect();
+    return { x: clientX - rect.left, y: clientY - rect.top };
+  },
+
+  onPointerDown(e) {
+    if (this.mode !== 'edit') return;
+    // Ignore clicks that originated in editor UI panels.
+    if (e.target.closest && e.target.closest('#editor-shell, #tool-shell, #editor-mode-bar')) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const { x, y } = this.toCanvasCoords(e.clientX, e.clientY);
+
+    // SELECT mode (Q): click changes selection, no drag.
+    if (this.gizmoMode === 'select') {
+      const hitId = this.hitTest(x, y);
+      this.select(hitId);  // null hit = deselect
+      return;
+    }
+
+    // W/E/R: drag the currently-selected asset. Clicking another object does
+    // NOT change selection (the user must press Q to re-pick).
+    // Translate-mode arrow handles and rotate-mode rings hijack the drag to
+    // lock to a specific axis (Unity-style).
+    const handleAxis = this.hitGizmoHandle(x, y);
+    const ringAxis = this.hitRotRing(x, y);
+    if (ringAxis) {
+      this.rotAxis = ringAxis;
+      this.refreshInspector();  // reflect the active axis in the inspector buttons
+    }
+    if (!this.selectedId) return;
+
+    const a = this.getAsset(this.selectedId);
+    if (!a) return;
+    const b = (() => { try { return a.bounds(); } catch (_) { return null; } })();
+    const cx = b ? b.x + b.w / 2 : x;
+    const cy = b ? b.y + b.h / 2 : y;
+    const snap = {};
+    const collect = (binding) => {
+      if (!binding) return;
+      for (const k of ['xKey','yKey','uKey','zKey']) {
+        const key = binding[k];
+        if (key && key in EditorTune) snap[key] = EditorTune[key];
+      }
+    };
+    collect(a.bindings.pos);
+    collect(a.bindings.scale);
+    collect(a.bindings.rot);
+
+    this.drag = {
+      asset: a,
+      mode: this.gizmoMode,
+      axis: this.rotAxis,
+      shiftAtStart: e.shiftKey,
+      // For translate mode: axisLock locks movement to one axis.
+      //   - 'x' or 'y' if the user grabbed a directional arrow handle
+      //   - resolved on first move if shiftAtStart === true (dominant-axis lock)
+      axisLock: handleAxis,
+      axisLockPending: !handleAxis && e.shiftKey,
+      startX: x, startY: y,
+      centerX: cx, centerY: cy,
+      startRadius: Math.max(8, Math.hypot(x - cx, y - cy)),
+      startAngle: Math.atan2(y - cy, x - cx),
+      snap,
+    };
+  },
+
+  onPointerMove(e) {
+    if (!this.drag) return;
+    e.preventDefault();
+    const { x, y } = this.toCanvasCoords(e.clientX, e.clientY);
+    const d = this.drag;
+    const a = d.asset;
+    const dx = x - d.startX, dy = y - d.startY;
+
+    if (d.mode === 'translate' && a.bindings.pos) {
+      const p = a.bindings.pos;
+      // Resolve a pending shift-lock as soon as the user moves meaningfully.
+      if (d.axisLockPending && (Math.abs(dx) > 4 || Math.abs(dy) > 4)) {
+        d.axisLock = Math.abs(dx) >= Math.abs(dy) ? 'x' : 'y';
+        d.axisLockPending = false;
+      }
+      const canX = (!d.axisLock || d.axisLock === 'x') && p.xKey != null;
+      const canY = (!d.axisLock || d.axisLock === 'y') && p.yKey != null;
+      if (canX) {
+        const sx = typeof p.xScale === 'function' ? p.xScale() : (p.xScale || 1);
+        this.setKey(p.xKey, d.snap[p.xKey] + dx * sx);
+      }
+      if (canY) {
+        const sy = typeof p.yScale === 'function' ? p.yScale() : (p.yScale || 1);
+        this.setKey(p.yKey, d.snap[p.yKey] + dy * sy);
+      }
+    } else if (d.mode === 'scale' && a.bindings.scale) {
+      const s = a.bindings.scale;
+      const uniform = e.shiftKey || (!s.xKey && !s.yKey && s.uKey);
+      // Linear pixel-based scaling. Drag right or up = grow, left or down = shrink.
+      // 200px of drag in a direction = factor 2 (= +100% of initial value).
+      const PER_PX = 0.005;
+      const uniformDelta = (dx - dy) * PER_PX;  // right + up = positive
+      const factorU = Math.max(0.05, 1 + uniformDelta);
+      const factorX = Math.max(0.05, 1 + dx * PER_PX);
+      const factorY = Math.max(0.05, 1 - dy * PER_PX);  // up = grow
+      if (uniform) {
+        if (s.uKey) this.setKey(s.uKey, this.clampScale(s.uKey, d.snap[s.uKey] * factorU));
+        else {
+          if (s.xKey) this.setKey(s.xKey, this.clampScale(s.xKey, d.snap[s.xKey] * factorU));
+          if (s.yKey) this.setKey(s.yKey, this.clampScale(s.yKey, d.snap[s.yKey] * factorU));
+        }
+      } else {
+        if (s.xKey) this.setKey(s.xKey, this.clampScale(s.xKey, d.snap[s.xKey] * factorX));
+        if (s.yKey) this.setKey(s.yKey, this.clampScale(s.yKey, d.snap[s.yKey] * factorY));
+        if (s.uKey && !s.xKey && !s.yKey) {
+          this.setKey(s.uKey, this.clampScale(s.uKey, d.snap[s.uKey] * factorU));
+        }
+      }
+    } else if (d.mode === 'rotate' && a.bindings.rot) {
+      const r = a.bindings.rot;
+      const axis = this.rotAxis;
+      const tgt = axis === 'x' ? r.xKey : axis === 'y' ? r.yKey : r.zKey;
+      if (!tgt) return;
+      let newDeg;
+      if (axis === 'z') {
+        const cur = Math.atan2(y - d.centerY, x - d.centerX);
+        const dAng = cur - d.startAngle;
+        newDeg = d.snap[tgt] + dAng * 180 / Math.PI;
+      } else {
+        const delta = axis === 'x' ? -dy : dx;
+        newDeg = d.snap[tgt] + delta * 0.6; // 0.6° per pixel
+      }
+      while (newDeg > 180) newDeg -= 360;
+      while (newDeg < -180) newDeg += 360;
+      // Apply live for all axes; 3D re-renders are throttled by the pending
+      // queue inside reRenderBobbinsY / reRenderTrayY, so dragging stays smooth.
+      this.setKey(tgt, newDeg);
+    }
+  },
+
+  onPointerUp() {
+    if (!this.drag) return;
+    this.drag = null;
+    this.refreshInspector();
+  },
+
+  setKey(key, value, opt = {}) {
+    EditorTune[key] = value;
+    // Live-update inspector input if not currently being typed in.
+    const input = document.querySelector(`#inspector input[data-key="${key}"]`);
+    if (input && document.activeElement !== input) {
+      input.value = this.formatValueRaw(key, value);
+    }
+    if (opt.defer3D) return;
+    applyEditorChange(key);
+    if (this.is3DRotKey(key)) {
+      const a = this.getAsset(this.selectedId);
+      this.apply3DReRender(a);
+    }
+  },
+
+  is3DRotKey(key) {
+    return ['bobbinXRotationDeg','bobbinYRotationDeg','bobbinIdleXRotationDeg','bobbinIdleYRotationDeg',
+            'trayYRotationDeg','trayIdleYRotationDeg','trayTiltDeg','trayIdleXRotationDeg'].includes(key);
+  },
+
+  apply3DReRender(asset) {
+    if (!asset) return;
+    if (asset.id === 'bobbinIdle' || asset.id === 'bobbinRail') {
+      reRenderBobbinsY(EditorTune.bobbinYRotationDeg, EditorTune.bobbinIdleYRotationDeg);
+    } else if (asset.id === 'trayIdle' || asset.id === 'trayRail') {
+      reRenderTrayY(EditorTune.trayYRotationDeg, EditorTune.trayTiltDeg, EditorTune.trayIdleYRotationDeg);
+    }
+  },
+
+  clampScale(key, v) {
+    if (key === 'arrowCount') return Math.max(8, Math.min(48, Math.round(v)));
+    if (key === 'queueCols') return Math.max(2, Math.min(6, Math.round(v)));
+    if (key === 'slotSize') return Math.max(40, Math.min(140, v));
+    if (key === 'counterFontSize') return Math.max(14, Math.min(48, v));
+    if (key === 'queueGap') return Math.max(0, Math.min(2, v));
+    if (key === 'arrowSize') return Math.max(0.05, Math.min(0.8, v));
+    if (key === 'arrowSecPerLap') return Math.max(0.5, v);
+    if (key === 'arrowHideStart' || key === 'arrowHideEnd') return Math.max(0, Math.min(1, v));
+    if (key === 'trayDumpVisible') return v >= 0.5 ? 1 : 0;
+    // Free-form offsets and angles: no lower clamp.
+    if (/Offset[XY]?$|RotationDeg$|TiltDeg$|^dump[XY]$|^gridShift/.test(key)) return v;
+    return Math.max(0.05, v);
+  },
+
+  formatValueRaw(key, v) {
+    if (key === 'arrowCount' || key === 'queueCols' || key === 'trayDumpVisible') return String(Math.round(v));
+    if (key.endsWith('Deg')) return v.toFixed(1);
+    if (typeof v === 'number') return v.toFixed(3);
+    return String(v);
+  },
+
+  // ===== Inspector =====
+  refreshInspector() {
+    const ins = document.getElementById('inspector');
+    if (!ins) return;
+    const a = this.getAsset(this.selectedId);
+    if (!a) {
+      ins.innerHTML = '<div class="empty">에셋을 선택하세요</div>';
+      return;
+    }
+    const sections = [];
+    sections.push(`<div class="field-title">${a.name} ${a.is3D ? '· 3D' : '· 2D'}</div>`);
+    // Prefab-style assets: one template controls every instance at runtime.
+    const PREFAB_HINT = {
+      bobbinIdle: '대기 중인 모든 보빈(큐 + 슬롯)이 이 한 개의 프리펩 값을 공유합니다.',
+      bobbinRail: '레일 위의 모든 보빈이 이 한 개의 프리펩 값을 공유합니다.',
+      trayIdle:   '덤프에 쌓인 모든 트레이가 이 한 개의 프리펩 값을 공유합니다.',
+      trayRail:   '레일 위의 모든 트레이가 이 한 개의 프리펩 값을 공유합니다.',
+      slot:       '5개 슬롯이 같은 크기/Y 오프셋 값을 공유합니다.',
+      queue:      '큐의 모든 보빈 셀이 같은 배율 / Y 오프셋을 공유합니다.',
+    };
+    if (PREFAB_HINT[a.id]) {
+      sections.push(`<div class="hint" style="background:#1c2530;padding:6px 8px;border-radius:5px;color:#aac">📦 ${PREFAB_HINT[a.id]}</div>`);
+    }
+
+    const renderGroup = (title, binding, axes) => {
+      if (!binding) return;
+      const rows = axes.map(ax => {
+        const key = binding[ax.bindingKey];
+        const enabled = !!key;
+        const axisClass = ax.axisName.toLowerCase();
+        const v = enabled ? this.formatValueRaw(key, EditorTune[key]) : '–';
+        return `<div class="field-row">
+          <span class="axis ${axisClass}">${ax.axisName}</span>
+          <input type="number" step="${ax.step}" data-key="${key || ''}" value="${v}" ${enabled ? '' : 'disabled'} class="${enabled ? '' : 'disabled'}">
+        </div>`;
+      }).join('');
+      sections.push(`<div class="field-group"><div class="field-title">${title}</div>${rows}</div>`);
+    };
+
+    renderGroup('이동 (W)', a.bindings.pos, [
+      { axisName: 'X', bindingKey: 'xKey', step: 1 },
+      { axisName: 'Y', bindingKey: 'yKey', step: 1 },
+    ]);
+    if (a.bindings.pos) {
+      sections.push(`<div class="field-group" style="margin-top:-2px"><button data-reset-pos="1" style="background:#404a55;color:#fff;border:0;border-radius:4px;padding:5px 9px;font-size:10.5px;cursor:pointer">↺ 위치 리셋</button></div>`);
+    }
+    if (a.bindings.scale) {
+      const s = a.bindings.scale;
+      const axes = s.uKey && !s.xKey && !s.yKey
+        ? [{ axisName: 'U', bindingKey: 'uKey', step: 0.05 }]
+        : [
+            { axisName: 'X', bindingKey: 'xKey', step: 0.05 },
+            { axisName: 'Y', bindingKey: 'yKey', step: 0.05 },
+          ];
+      renderGroup('크기 (E)', s, axes);
+    }
+    if (a.bindings.rot) {
+      renderGroup('회전 (R) · °', a.bindings.rot, [
+        { axisName: 'X', bindingKey: 'xKey', step: 1 },
+        { axisName: 'Y', bindingKey: 'yKey', step: 1 },
+        { axisName: 'Z', bindingKey: 'zKey', step: 1 },
+      ]);
+      // Rotation axis selector
+      sections.push(`<div class="field-group">
+        <div class="field-title">회전축 선택</div>
+        <div class="gizmo-bar">
+          <button data-rot-axis="x" class="${this.rotAxis === 'x' ? 'active' : ''}">X</button>
+          <button data-rot-axis="y" class="${this.rotAxis === 'y' ? 'active' : ''}">Y</button>
+          <button data-rot-axis="z" class="${this.rotAxis === 'z' ? 'active' : ''}">Z</button>
+        </div>
+      </div>`);
+    }
+    // Extra / miscellaneous properties for this asset (arrowSize, queueCols, ...)
+    if (a.bindings.extra && a.bindings.extra.length) {
+      const rows = a.bindings.extra.map(ext => {
+        const v = EditorTune[ext.key];
+        const step = ext.step ?? 0.05;
+        const min = ext.min != null ? ` min="${ext.min}"` : '';
+        const max = ext.max != null ? ` max="${ext.max}"` : '';
+        const display = ext.int ? Math.round(v) : (typeof v === 'number' ? v.toFixed(3).replace(/\.?0+$/, '') : v);
+        return `<div class="field-row" style="grid-template-columns: 1fr 80px">
+          <label style="font-size:10.5px;color:#bcd">${ext.label}</label>
+          <input type="number" step="${step}"${min}${max} data-key="${ext.key}" data-extra="1" value="${display}">
+        </div>`;
+      }).join('');
+      sections.push(`<div class="field-group"><div class="field-title">기타 속성</div>${rows}</div>`);
+    }
+
+    // Layer priority — reorders the Game.layers this asset lives in.
+    const layerKey = ASSET_LAYER_OF[a.id];
+    if (layerKey) {
+      const order = Array.isArray(EditorTune.layerOrder) && EditorTune.layerOrder.length
+        ? EditorTune.layerOrder
+        : DEFAULT_LAYER_ORDER;
+      const pos = order.indexOf(layerKey);
+      const layerName = LAYER_NAMES_KO[layerKey] || layerKey;
+      const total = order.length;
+      // Higher index = on top. "위로" promotes the layer (toward foreground).
+      const upDisabled = pos < 0 || pos >= total - 1;
+      const downDisabled = pos <= 0;
+      const sharedHint = (a.id === 'arrows' || a.id === 'bobbinIdle' || a.id === 'bobbinRail' ||
+                         a.id === 'queue' || a.id === 'counter' || a.id === 'trayIdle')
+        ? `<div class="hint" style="margin-top:4px;font-size:10px;color:#889">같은 레이어(${layerName})의 다른 객체도 함께 이동합니다.</div>`
+        : '';
+      sections.push(`<div class="field-group">
+        <div class="field-title">레이어 우선순위</div>
+        <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
+          <span style="flex:1;font-size:11px;color:#dfe">${layerName}
+            <span style="color:#8a9">· ${pos + 1}/${total} (위가 앞)</span>
+          </span>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px">
+          <button data-layer-step="-1" ${downDisabled ? 'disabled' : ''}
+            style="background:#404a55;color:#fff;border:0;border-radius:4px;padding:6px;font-size:11.5px;cursor:${downDisabled ? 'not-allowed' : 'pointer'};opacity:${downDisabled ? 0.45 : 1}">▼ 아래로</button>
+          <button data-layer-step="1" ${upDisabled ? 'disabled' : ''}
+            style="background:#404a55;color:#fff;border:0;border-radius:4px;padding:6px;font-size:11.5px;cursor:${upDisabled ? 'not-allowed' : 'pointer'};opacity:${upDisabled ? 0.45 : 1}">▲ 위로</button>
+        </div>${sharedHint}
+      </div>`);
+    }
+
+    // Help hint
+    const hints = [];
+    if (this.gizmoMode === 'select') hints.push('객체 클릭으로 선택 (Q 모드). W·E·R로 도구 전환');
+    else if (this.gizmoMode === 'translate' && a.bindings.pos) hints.push('드래그: 이동 · 화살표 핸들 또는 Shift+드래그: 한 방향 고정');
+    else if (this.gizmoMode === 'scale' && a.bindings.scale) hints.push('드래그: 크기 · Shift+드래그: 비율 고정');
+    else if (this.gizmoMode === 'rotate' && a.bindings.rot) hints.push('빨강(X) · 초록(Y) · 파랑(Z) 링을 잡아 드래그 (또는 X/Y/Z 버튼으로 축 선택)');
+    else hints.push('이 도구는 이 에셋에 사용할 수 없습니다 (W/E/R 중 다른 도구로 전환)');
+    sections.push(`<div class="hint">${hints.join(' · ')}</div>`);
+
+    ins.innerHTML = sections.join('');
+
+    // Hook number inputs
+    ins.querySelectorAll('input[data-key]').forEach(inp => {
+      const key = inp.dataset.key;
+      if (!key) return;
+      inp.addEventListener('change', () => {
+        const v = parseFloat(inp.value);
+        if (!isNaN(v)) {
+          EditorTune[key] = this.clampScale(key, v);
+          applyEditorChange(key);
+          if (this.is3DRotKey(key)) this.apply3DReRender(this.getAsset(this.selectedId));
+        }
+      });
+    });
+    // Axis buttons
+    ins.querySelectorAll('button[data-rot-axis]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        this.rotAxis = btn.dataset.rotAxis;
+        this.refreshInspector();
+      });
+    });
+    // Position reset
+    ins.querySelectorAll('button[data-reset-pos]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const p = a.bindings.pos;
+        if (!p) return;
+        for (const k of ['xKey','yKey']) {
+          const key = p[k];
+          if (key && key in EDITOR_DEFAULTS) {
+            EditorTune[key] = EDITOR_DEFAULTS[key];
+            applyEditorChange(key);
+          }
+        }
+        this.refreshInspector();
+        flashEditorMessage(`${a.name} 위치 기본값 복원`);
+      });
+    });
+    // Layer up/down — swap the asset's layer with its neighbour in EditorTune.
+    ins.querySelectorAll('button[data-layer-step]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const lk = ASSET_LAYER_OF[a.id];
+        if (!lk) return;
+        const step = parseInt(btn.dataset.layerStep, 10);  // +1 = up (toward top)
+        const order = (Array.isArray(EditorTune.layerOrder) && EditorTune.layerOrder.length
+          ? EditorTune.layerOrder
+          : DEFAULT_LAYER_ORDER).slice();
+        const i = order.indexOf(lk);
+        const j = i + step;
+        if (i < 0 || j < 0 || j >= order.length) return;
+        [order[i], order[j]] = [order[j], order[i]];
+        EditorTune.layerOrder = order;
+        applyLayerOrder();
+        this.refreshInspector();
+        const dir = step > 0 ? '위로' : '아래로';
+        flashEditorMessage(`${LAYER_NAMES_KO[lk] || lk} 레이어 ${dir} 이동`);
+      });
+    });
+  },
+
+  // ===== Gizmo overlay =====
+  drawGizmo() {
+    const g = this.gizmoGfx;
+    g.clear();
+    // Faint outlines on ALL editable assets so the user can see what's
+    // pickable in the scene (Unity-style).
+    for (const asset of this.assets) {
+      if (asset.id === this.selectedId) continue;
+      let r; try { r = asset.bounds(); } catch (_) { continue; }
+      if (!r || !isFinite(r.x)) continue;
+      g.lineStyle(1, 0xffffff, 0.22);
+      g.drawRect(r.x, r.y, r.w, r.h);
+    }
+    if (!this.selectedId) return;
+    const a = this.getAsset(this.selectedId);
+    if (!a) return;
+    let b;
+    try { b = a.bounds(); } catch (_) { return; }
+    if (!b) return;
+    const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+    // Bounding rect
+    g.lineStyle(2, 0x82c8ff, 0.9);
+    g.drawRect(b.x, b.y, b.w, b.h);
+    // Center dot
+    g.beginFill(0x82c8ff, 0.9);
+    g.drawCircle(cx, cy, 3.5);
+    g.endFill();
+    // Mode-specific
+    if (this.gizmoMode === 'select') {
+      // Just the bounding rect + center dot is enough for select mode.
+    } else if (this.gizmoMode === 'translate') {
+      // Highlight the locked axis (during a single-axis drag).
+      const lock = this.drag?.axisLock;
+      const xActive = !lock || lock === 'x';
+      const yActive = !lock || lock === 'y';
+      const xAlpha = xActive ? 1 : 0.18;
+      const yAlpha = yActive ? 1 : 0.18;
+      // X axis arrow (red)
+      g.lineStyle(3, 0xf87a7a, xAlpha);
+      g.moveTo(cx, cy); g.lineTo(cx + 38, cy);
+      g.lineStyle(0); g.beginFill(0xf87a7a, xAlpha);
+      g.drawPolygon([cx+38,cy-6, cx+50,cy, cx+38,cy+6]); g.endFill();
+      // Y axis arrow (green)
+      g.lineStyle(3, 0x7aff8a, yAlpha);
+      g.moveTo(cx, cy); g.lineTo(cx, cy - 38);
+      g.lineStyle(0); g.beginFill(0x7aff8a, yAlpha);
+      g.drawPolygon([cx-6,cy-38, cx,cy-50, cx+6,cy-38]); g.endFill();
+    } else if (this.gizmoMode === 'scale') {
+      // Corner & edge scale handles
+      g.lineStyle(2, 0x82c8ff, 1);
+      g.beginFill(0x82c8ff, 1);
+      const r = 5;
+      g.drawRect(b.x - r, b.y - r, r*2, r*2);
+      g.drawRect(b.x + b.w - r, b.y - r, r*2, r*2);
+      g.drawRect(b.x - r, b.y + b.h - r, r*2, r*2);
+      g.drawRect(b.x + b.w - r, b.y + b.h - r, r*2, r*2);
+      g.endFill();
+    } else if (this.gizmoMode === 'rotate') {
+      // Unity-style 3-ring rotation gizmo. Each ring is drawn for the axes
+      // this asset supports (3D assets get all three; 2D ones get only Z).
+      const { r } = this.rotRingGeom(b);
+      const rThin = r * 0.28;
+      const rot = a.bindings.rot;
+      const drawRing = (rx, ry, color, axis) => {
+        const has = (axis === 'x' ? rot.xKey : axis === 'y' ? rot.yKey : rot.zKey);
+        if (!has) return;
+        const active = this.rotAxis === axis;
+        g.lineStyle(active ? 3.5 : 2, color, active ? 1 : 0.55);
+        g.drawEllipse(cx, cy, rx, ry);
+      };
+      drawRing(r, r, 0x7aa8ff, 'z');           // blue, full circle  → Z axis
+      drawRing(rThin, r, 0xf87a7a, 'x');       // red, vertical thin → X axis
+      drawRing(r, rThin, 0x7aff8a, 'y');       // green, horizontal  → Y axis
+    }
+  },
+};
+
+function buildEditorAssetRegistry() {
+  const oh = () => Math.max(1, Layout.hoop.outerHalf);
+  return [
+    {
+      id: 'hoop', name: '후프 프레임 (image 232)', is3D: false,
+      bounds: () => ({
+        x: Layout.hoop.cx - Layout.hoop.outerHalf,
+        y: Layout.hoop.cy - Layout.hoop.outerHalf,
+        w: Layout.hoop.outerHalf * 2,
+        h: Layout.hoop.outerHalf * 2,
+      }),
+      bindings: { pos: { xKey: 'railOffsetX', yKey: 'railOffsetY' } },
+    },
+    {
+      id: 'brush', name: '브러시 (image 231)', is3D: false,
+      bounds: () => {
+        const L = Layout.hoop;
+        const hoopTex = Game.tex?.railHoop;
+        const brushTex = Game.tex?.railBrush;
+        // Fall back to a placeholder square if textures aren't loaded yet.
+        if (!hoopTex || !brushTex) {
+          const s = Math.max(40, L.outerHalf * 0.45);
+          const cx = L.cx + L.outerHalf * (EditorTune.brushOffsetX ?? -0.78);
+          const cy = L.cy + L.outerHalf * (EditorTune.brushOffsetY ?? 0.75);
+          return { x: cx - s/2, y: cy - s/2, w: s, h: s };
+        }
+        const baseScale = (L.outerHalf * 2) / hoopTex.width;
+        const scale = baseScale * (EditorTune.brushScale ?? 1);
+        const w = brushTex.width * scale;
+        const h = brushTex.height * scale;
+        const cx = L.cx + L.outerHalf * (EditorTune.brushOffsetX ?? -0.78);
+        const cy = L.cy + L.outerHalf * (EditorTune.brushOffsetY ?? 0.75);
+        return { x: cx - w/2, y: cy - h/2, w, h };
+      },
+      bindings: {
+        pos:   { xKey: 'brushOffsetX', yKey: 'brushOffsetY',
+                 xScale: () => 1 / oh(), yScale: () => 1 / oh() },
+        scale: { uKey: 'brushScale' },
+      },
+    },
+    {
+      id: 'grid', name: '그리드 (픽셀아트)', is3D: false,
+      bounds: () => {
+        const halfW = (Layout.pattern.cols * Layout.cellSize) / 2;
+        const halfH = (Layout.pattern.rows * Layout.cellSize) / 2;
+        const cx = Layout.hoop.cx - Layout.hoop.innerHalf + Layout.gridOffsetX + halfW;
+        const cy = Layout.hoop.cy - Layout.hoop.innerHalf + Layout.gridOffsetY + halfH;
+        return { x: cx - halfW, y: cy - halfH, w: halfW * 2, h: halfH * 2 };
+      },
+      bindings: {
+        pos:   { xKey: 'gridShiftX', yKey: 'gridShiftY' },
+        scale: { xKey: 'gridScaleX', yKey: 'gridScaleY', xScale: 0.005, yScale: -0.005 },
+      },
+    },
+    {
+      id: 'arrows', name: '화살표 (rail arrows)', is3D: false,
+      bounds: () => ({
+        x: Layout.hoop.cx - Layout.ringHalfX - Layout.hoop.rim * 0.5,
+        y: Layout.hoop.cy - Layout.ringHalfY - Layout.hoop.rim * 0.5,
+        w: (Layout.ringHalfX + Layout.hoop.rim * 0.5) * 2,
+        h: (Layout.ringHalfY + Layout.hoop.rim * 0.5) * 2,
+      }),
+      bindings: {
+        pos:   { xKey: 'arrowOffsetX', yKey: 'arrowOffsetY',
+                 xScale: () => 1 / oh(), yScale: () => 1 / oh() },
+        scale: { xKey: 'arrowRadiusX', yKey: 'arrowRadiusY',
+                 xScale: 0.003, yScale: -0.003 },
+        extra: [
+          { key: 'arrowSize',      label: '화살표 크기 (rim%)', step: 0.01,  min: 0.05, max: 0.8 },
+          { key: 'arrowCount',     label: '화살표 개수',         step: 1,     min: 8,    max: 48,   int: true },
+          { key: 'arrowSecPerLap', label: '한 바퀴 (초)',        step: 0.5,   min: 3,    max: 30 },
+          { key: 'arrowHideStart', label: '숨김 시작 (t 0~1)',  step: 0.01,  min: 0,    max: 1 },
+          { key: 'arrowHideEnd',   label: '숨김 끝 (t 0~1)',    step: 0.01,  min: 0,    max: 1 },
+        ],
+      },
+    },
+    {
+      id: 'bobbinIdle', name: '보빈 (대기)', is3D: true,
+      bounds: () => {
+        const ref = Game.queue?.[0]?.bobbin?.gfx || Game.slots?.find(s => s)?.bobbin?.gfx;
+        const size = Math.max(40, Layout.bobbinSize * (EditorTune.bobbinIdleScale || 1) * 1.1);
+        const cx = ref?.x ?? (Layout.queue?.startX || Layout.W / 2);
+        const cy = ref?.y ?? (Layout.queue?.y || Layout.H - 100);
+        return { x: cx - size/2, y: cy - size/2, w: size, h: size };
+      },
+      bindings: {
+        scale: { uKey: 'bobbinIdleScale' },
+        rot:   { xKey: 'bobbinIdleXRotationDeg',
+                 yKey: 'bobbinIdleYRotationDeg',
+                 zKey: 'bobbinIdleRotationDeg' },
+      },
+    },
+    {
+      id: 'bobbinRail', name: '보빈 (레일)', is3D: true,
+      bounds: () => {
+        const ref = Game.rail?.[0]?.bobbin?.gfx;
+        const size = Math.max(40, Layout.bobbinSize * (EditorTune.bobbinSpriteScale || 1) * 1.1);
+        const cx = ref?.x ?? (Layout.hoop.cx - Layout.ringHalfX);
+        const cy = ref?.y ?? Layout.hoop.cy;
+        return { x: cx - size/2, y: cy - size/2, w: size, h: size };
+      },
+      bindings: {
+        scale: { uKey: 'bobbinSpriteScale' },
+        rot:   { xKey: 'bobbinXRotationDeg',
+                 yKey: 'bobbinYRotationDeg',
+                 zKey: 'bobbinRailRotationDeg' },
+      },
+    },
+    {
+      id: 'trayIdle', name: '트레이 (대기)', is3D: true,
+      bounds: () => {
+        const size = Math.max(40, Layout.bobbinSize * (EditorTune.trayIdleScale || 1) * 1.3);
+        return { x: Layout.dump.x - size/2, y: Layout.dump.y - size/2, w: size, h: size };
+      },
+      bindings: {
+        pos:   { xKey: 'dumpX', yKey: 'dumpY',
+                 xScale: () => 1 / oh(), yScale: () => 1 / oh() },
+        scale: { uKey: 'trayIdleScale' },
+        rot:   { xKey: 'trayIdleXRotationDeg',
+                 yKey: 'trayIdleYRotationDeg',
+                 zKey: 'trayDumpRotationDeg' },
+        extra: [
+          { key: 'trayDumpVisible', label: '덤프에 표시 (0/1)', step: 1, min: 0, max: 1, int: true },
+        ],
+      },
+    },
+    {
+      id: 'trayRail', name: '트레이 (레일)', is3D: true,
+      bounds: () => {
+        const ref = Game.rail?.[0]?.carrier?.gfx;
+        const size = Math.max(40, Layout.bobbinSize * (EditorTune.trayScale || 1) * 1.4);
+        const cx = ref?.x ?? (Layout.hoop.cx - Layout.ringHalfX);
+        const cy = ref?.y ?? Layout.hoop.cy;
+        return { x: cx - size/2, y: cy - size/2, w: size, h: size };
+      },
+      bindings: {
+        scale: { uKey: 'trayScale' },
+        rot:   { xKey: 'trayTiltDeg',
+                 yKey: 'trayYRotationDeg',
+                 zKey: 'trayLaunchedRotationDeg' },
+      },
+    },
+    {
+      id: 'slot', name: '슬롯', is3D: false,
+      bounds: () => {
+        const s = Layout.slot;
+        return {
+          x: s.startX - s.size/2,
+          y: s.y - s.size/2,
+          w: (s.spacing * 4) + s.size,
+          h: s.size,
+        };
+      },
+      bindings: {
+        pos:   { xKey: 'slotXOffset', yKey: 'slotYOffset' },
+        scale: { uKey: 'slotSize', uScale: 0.5 },
+      },
+    },
+    {
+      id: 'queue', name: '큐 (대기 보빈 그리드)', is3D: false,
+      bounds: () => {
+        const q = Layout.queue;
+        const cols = q.cols;
+        const rows = Math.max(1, Math.ceil(QUEUE_VISIBLE_MAX / cols));
+        return {
+          x: q.startX - q.size/2,
+          y: q.y - q.size/2,
+          w: (cols - 1) * q.spacing + q.size,
+          h: (rows - 1) * q.spacing + q.size,
+        };
+      },
+      bindings: {
+        pos:   { xKey: 'queueXOffset', yKey: 'queueYOffset' },
+        scale: { uKey: 'queueBobbinScale' },
+        extra: [
+          { key: 'queueCols', label: '큐 열 수',     step: 1,    min: 2, max: 6, int: true },
+          { key: 'queueGap',  label: '큐 가로 간격', step: 0.05, min: 0, max: 2 },
+        ],
+      },
+    },
+    {
+      id: 'counter', name: '카운터 (X/5)', is3D: false,
+      bounds: () => {
+        const c = Layout.counter;
+        const fs = EditorTune.counterFontSize;
+        return { x: c.x - fs * 0.4, y: c.y - fs * 0.5, w: fs * 1.7, h: fs * 1.1 };
+      },
+      bindings: {
+        pos:   { xKey: 'counterOffsetX', yKey: 'counterOffsetY' },
+        scale: { uKey: 'counterFontSize', uScale: 0.2 },
+      },
+    },
+  ];
+}
+
+/* =========================================================================
+ *  Map Tool — paint a pattern, paste image, test, build to HTML
+ * ========================================================================= */
+const MapTool = {
+  cols: 28,
+  rows: 28,
+  cells: null,                   // [row][col] = colorKey | null
+  selectedColor: 'blue',
+  canvas: null, ctx: null,
+  drawing: false, drawMode: 'paint',
+  pasteListenerInstalled: false,
+
+  init() {
+    this.canvas = document.getElementById('map-canvas');
+    if (!this.canvas) return;
+    this.ctx = this.canvas.getContext('2d');
+    this.cells = Array.from({ length: this.rows }, () => Array(this.cols).fill(null));
+    this._buildPalette();
+    this._sizeCanvas();
+    this._attachCanvasEvents();
+    this._attachControlEvents();
+    this._installPasteListener();
+    this.render();
+    this.updateBobbinPreview();
+  },
+
+  onShow() {
+    // Sync slider displays whenever the map tab becomes active
+    const cs = document.getElementById('map-cols');
+    const rs = document.getElementById('map-rows');
+    if (cs) { cs.value = this.cols; cs.parentElement.querySelector('.val').textContent = this.cols; }
+    if (rs) { rs.value = this.rows; rs.parentElement.querySelector('.val').textContent = this.rows; }
+  },
+
+  _buildPalette() {
+    const wrap = document.getElementById('map-palette');
+    if (!wrap) return;
+    wrap.innerHTML = '';
+    // Eraser button first
+    const eraseBtn = document.createElement('button');
+    eraseBtn.title = '지우개';
+    eraseBtn.dataset.color = '';
+    eraseBtn.innerHTML = '<span class="swatch" style="background:repeating-linear-gradient(45deg,#444,#444 4px,#222 4px,#222 8px)"></span>';
+    wrap.appendChild(eraseBtn);
+    // Wool colors
+    for (const [key, def] of Object.entries(WOOL)) {
+      const b = document.createElement('button');
+      b.title = key;
+      b.dataset.color = key;
+      const hex = '#' + def.fill.toString(16).padStart(6, '0');
+      b.innerHTML = `<span class="swatch" style="background:${hex}"></span>`;
+      wrap.appendChild(b);
+    }
+    wrap.addEventListener('click', (e) => {
+      const btn = e.target.closest('button');
+      if (!btn) return;
+      this.selectedColor = btn.dataset.color || null;  // empty → eraser
+      wrap.querySelectorAll('button').forEach(b => b.classList.remove('selected'));
+      btn.classList.add('selected');
+    });
+    // Default selection
+    wrap.querySelector(`button[data-color="${this.selectedColor}"]`)?.classList.add('selected');
+  },
+
+  _sizeCanvas() {
+    // Render the grid at consistent on-screen size — about 280px wide.
+    const SIZE = 280;
+    const cellPx = Math.max(4, Math.floor(SIZE / Math.max(this.cols, this.rows)));
+    this.canvas.width  = cellPx * this.cols;
+    this.canvas.height = cellPx * this.rows;
+    this._cellPx = cellPx;
+  },
+
+  _attachCanvasEvents() {
+    const cv = this.canvas;
+    const paintAt = (ev) => {
+      const rect = cv.getBoundingClientRect();
+      const cx = (ev.clientX - rect.left) * (cv.width  / rect.width);
+      const cy = (ev.clientY - rect.top)  * (cv.height / rect.height);
+      const col = Math.floor(cx / this._cellPx);
+      const row = Math.floor(cy / this._cellPx);
+      if (row < 0 || row >= this.rows || col < 0 || col >= this.cols) return;
+      const v = (this.drawMode === 'erase' || !this.selectedColor) ? null : this.selectedColor;
+      if (this.cells[row][col] === v) return;
+      this.cells[row][col] = v;
+      this.render();
+      this.updateBobbinPreview();
+    };
+    cv.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      this.drawing = true;
+      this.drawMode = (e.button === 2) ? 'erase' : 'paint';
+      cv.setPointerCapture(e.pointerId);
+      paintAt(e);
+    });
+    cv.addEventListener('pointermove', (e) => { if (this.drawing) paintAt(e); });
+    cv.addEventListener('pointerup', (e) => {
+      this.drawing = false;
+      try { cv.releasePointerCapture(e.pointerId); } catch {}
+    });
+    cv.addEventListener('contextmenu', (e) => e.preventDefault());
+  },
+
+  _attachControlEvents() {
+    document.getElementById('map-cols')?.addEventListener('input', (e) => {
+      const v = parseInt(e.target.value, 10);
+      e.target.parentElement.querySelector('.val').textContent = v;
+      this.resize(v, this.rows);
+    });
+    document.getElementById('map-rows')?.addEventListener('input', (e) => {
+      const v = parseInt(e.target.value, 10);
+      e.target.parentElement.querySelector('.val').textContent = v;
+      this.resize(this.cols, v);
+    });
+    document.getElementById('map-paste')?.addEventListener('click', () => this._pasteFromClipboard());
+    document.getElementById('map-clear')?.addEventListener('click', () => this.clear());
+    document.getElementById('map-auto-trim')?.addEventListener('click', () => this.autoTrim());
+    document.getElementById('map-load-cur')?.addEventListener('click', () => this.loadCurrentPattern());
+    document.getElementById('map-test')?.addEventListener('click', () => this.applyAndReload());
+    document.getElementById('map-build')?.addEventListener('click', () => this.buildHTML());
+  },
+
+  _installPasteListener() {
+    if (this.pasteListenerInstalled) return;
+    this.pasteListenerInstalled = true;
+    window.addEventListener('paste', async (e) => {
+      // Only handle paste while map tool is the visible section AND we're in edit mode.
+      const mapSec = document.querySelector('[data-tool-section="map"]');
+      if (!mapSec || mapSec.hidden) return;
+      if (!document.body.classList.contains('editor-mode')) return;
+      const items = e.clipboardData?.items || [];
+      for (const item of items) {
+        if (item.type?.startsWith('image/')) {
+          e.preventDefault();
+          const file = item.getAsFile();
+          if (file) await this.applyImage(file);
+          return;
+        }
+      }
+    });
+  },
+
+  async _pasteFromClipboard() {
+    // Try the navigator.clipboard API (modern, requires permission)
+    try {
+      if (navigator.clipboard?.read) {
+        const items = await navigator.clipboard.read();
+        for (const it of items) {
+          for (const t of it.types) {
+            if (t.startsWith('image/')) {
+              const blob = await it.getType(t);
+              await this.applyImage(blob);
+              return;
+            }
+          }
+        }
+        flashEditorMessage('클립보드에 이미지가 없습니다');
+      } else {
+        flashEditorMessage('Ctrl+V로 직접 붙여넣으세요');
+      }
+    } catch (err) {
+      flashEditorMessage('붙여넣기 실패: ' + err.message);
+    }
+  },
+
+  async applyImage(blob) {
+    const url = URL.createObjectURL(blob);
+    try {
+      const img = await new Promise((res, rej) => {
+        const i = new Image();
+        i.onload = () => res(i);
+        i.onerror = rej;
+        i.src = url;
+      });
+      // Pick a grid size that preserves the image's native resolution as closely as possible.
+      // - If image fits in [MIN_GRID, MAX_GRID]^2 → use native dimensions 1:1
+      // - If larger → scale down preserving aspect ratio, longest side = MAX_GRID
+      // - If smaller in one dimension → bump that side up to MIN_GRID
+      const MIN_GRID = 16, MAX_GRID = 64;
+      let cols, rows;
+      const longest = Math.max(img.width, img.height);
+      if (longest > MAX_GRID) {
+        const k = MAX_GRID / longest;
+        cols = Math.max(MIN_GRID, Math.round(img.width  * k));
+        rows = Math.max(MIN_GRID, Math.round(img.height * k));
+      } else {
+        cols = Math.max(MIN_GRID, img.width);
+        rows = Math.max(MIN_GRID, img.height);
+      }
+      // Apply the new grid size
+      this.cols = cols; this.rows = rows;
+      this.cells = Array.from({ length: rows }, () => Array(cols).fill(null));
+      // Update sliders
+      const csEl = document.getElementById('map-cols');
+      const rsEl = document.getElementById('map-rows');
+      if (csEl) { csEl.value = cols; csEl.parentElement.querySelector('.val').textContent = cols; }
+      if (rsEl) { rsEl.value = rows; rsEl.parentElement.querySelector('.val').textContent = rows; }
+      this._sizeCanvas();
+
+      // Draw image into temp canvas at cols×rows. Use 1:1 if it fits exactly, else fit-to-shortest.
+      const cv = document.createElement('canvas');
+      cv.width = cols; cv.height = rows;
+      const ctx = cv.getContext('2d', { willReadFrequently: true });
+      ctx.imageSmoothingEnabled = (img.width !== cols || img.height !== rows);
+      const fit = Math.min(cols / img.width, rows / img.height);
+      const dw = img.width  * fit;
+      const dh = img.height * fit;
+      const dx = (cols - dw) / 2;
+      const dy = (rows - dh) / 2;
+      ctx.clearRect(0, 0, cols, rows);
+      ctx.drawImage(img, dx, dy, dw, dh);
+
+      const data = ctx.getImageData(0, 0, cols, rows).data;
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          const i = (r * cols + c) * 4;
+          const a = data[i + 3];
+          if (a < 64) { this.cells[r][c] = null; continue; }
+          this.cells[r][c] = quantizeToWool(data[i], data[i+1], data[i+2]);
+        }
+      }
+      this.render();
+      this.updateBobbinPreview();
+      const nativeStr = (img.width === cols && img.height === rows) ? ' (원본 해상도)' : ` (${img.width}×${img.height} → ${cols}×${rows})`;
+      flashEditorMessage(`이미지 적용 ✓${nativeStr}`);
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  },
+
+  loadCurrentPattern() {
+    this.resize(PATTERN.width, PATTERN.height);
+    for (let r = 0; r < this.rows; r++) {
+      for (let c = 0; c < this.cols; c++) {
+        this.cells[r][c] = PATTERN.cells[r]?.[c] || null;
+      }
+    }
+    this.render();
+    this.updateBobbinPreview();
+    flashEditorMessage('현재 패턴 불러왔습니다 ✓');
+  },
+
+  resize(cols, rows) {
+    const old = this.cells;
+    const oldC = this.cols, oldR = this.rows;
+    this.cols = cols;
+    this.rows = rows;
+    const next = Array.from({ length: rows }, () => Array(cols).fill(null));
+    // Copy what we can (top-left aligned)
+    for (let r = 0; r < Math.min(rows, oldR); r++) {
+      for (let c = 0; c < Math.min(cols, oldC); c++) {
+        next[r][c] = old[r][c];
+      }
+    }
+    this.cells = next;
+    this._sizeCanvas();
+    this.render();
+    this.updateBobbinPreview();
+  },
+
+  clear() {
+    for (let r = 0; r < this.rows; r++)
+      for (let c = 0; c < this.cols; c++)
+        this.cells[r][c] = null;
+    this.render();
+    this.updateBobbinPreview();
+  },
+
+  autoTrim() {
+    let minR = this.rows, maxR = -1, minC = this.cols, maxC = -1;
+    for (let r = 0; r < this.rows; r++) {
+      for (let c = 0; c < this.cols; c++) {
+        if (this.cells[r][c]) {
+          if (r < minR) minR = r;
+          if (r > maxR) maxR = r;
+          if (c < minC) minC = c;
+          if (c > maxC) maxC = c;
+        }
+      }
+    }
+    if (maxR < 0) { flashEditorMessage('그리드가 비어있습니다'); return; }
+    const newR = maxR - minR + 1;
+    const newC = maxC - minC + 1;
+    const next = Array.from({ length: newR }, () => Array(newC).fill(null));
+    for (let r = 0; r < newR; r++)
+      for (let c = 0; c < newC; c++)
+        next[r][c] = this.cells[minR + r][minC + c];
+    this.cols = newC;
+    this.rows = newR;
+    this.cells = next;
+    const cs = document.getElementById('map-cols');
+    const rs = document.getElementById('map-rows');
+    if (cs) { cs.value = newC; cs.parentElement.querySelector('.val').textContent = newC; }
+    if (rs) { rs.value = newR; rs.parentElement.querySelector('.val').textContent = newR; }
+    this._sizeCanvas();
+    this.render();
+    this.updateBobbinPreview();
+    flashEditorMessage(`잘라냄: ${newC}×${newR}`);
+  },
+
+  render() {
+    const { ctx, _cellPx: cp, cols, rows, cells } = this;
+    if (!ctx) return;
+    ctx.fillStyle = '#0d1116';
+    ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const k = cells[r][c];
+        if (!k) continue;
+        ctx.fillStyle = '#' + WOOL[k].fill.toString(16).padStart(6, '0');
+        ctx.fillRect(c * cp, r * cp, cp, cp);
+      }
+    }
+    // Subtle grid lines
+    ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let i = 0; i <= cols; i++) {
+      ctx.moveTo(i * cp + 0.5, 0); ctx.lineTo(i * cp + 0.5, rows * cp);
+    }
+    for (let i = 0; i <= rows; i++) {
+      ctx.moveTo(0, i * cp + 0.5); ctx.lineTo(cols * cp, i * cp + 0.5);
+    }
+    ctx.stroke();
+  },
+
+  updateBobbinPreview() {
+    const counts = {};
+    for (const row of this.cells) {
+      for (const c of row) {
+        if (c) counts[c] = (counts[c] || 0) + 1;
+      }
+    }
+    const el = document.getElementById('bobbin-preview');
+    if (!el) return;
+    const entries = Object.entries(counts);
+    if (!entries.length) { el.innerHTML = '<em>비어있음</em>'; return; }
+    el.innerHTML = entries
+      .sort((a, b) => b[1] - a[1])
+      .map(([color, n]) => {
+        const hex = '#' + WOOL[color].fill.toString(16).padStart(6, '0');
+        const bobbins = Math.ceil(n / BOBBIN_MAX_COUNT);
+        return `<div class="chip"><span class="sw" style="background:${hex}"></span> ${color}: ${n}개 (${bobbins} 보빈)</div>`;
+      }).join('');
+  },
+
+  exportPattern() {
+    return {
+      width: this.cols,
+      height: this.rows,
+      cells: this.cells.map(row => row.slice()),
+    };
+  },
+
+  applyAndReload() {
+    const pattern = this.exportPattern();
+    let nonEmpty = 0;
+    for (const r of pattern.cells) for (const c of r) if (c) nonEmpty++;
+    if (!nonEmpty) { flashEditorMessage('빈 그리드는 테스트할 수 없습니다'); return; }
+    try {
+      sessionStorage.setItem('wooloop_test_pattern', JSON.stringify(pattern));
+    } catch (err) {
+      flashEditorMessage('테스트 저장 실패: ' + err.message);
+      return;
+    }
+    flashEditorMessage('적용 후 리로드…');
+    setTimeout(() => location.reload(), 300);
+  },
+
+  async buildHTML() {
+    const pattern = this.exportPattern();
+    let nonEmpty = 0;
+    for (const r of pattern.cells) for (const c of r) if (c) nonEmpty++;
+    if (!nonEmpty) { flashEditorMessage('빈 그리드는 빌드할 수 없습니다'); return; }
+    try {
+      const src = await fetch(location.href).then(r => r.text());
+      const json = JSON.stringify(pattern);
+      const overrideLine = `const PATTERN_OVERRIDE = ${json};`;
+      const next = src.replace(/const PATTERN_OVERRIDE\s*=\s*[^;]+;/, overrideLine);
+      if (next === src) { flashEditorMessage('소스에 PATTERN_OVERRIDE 위치를 찾지 못함'); return; }
+      const blob = new Blob([next], { type: 'text/html' });
+      const a = document.createElement('a');
+      const ts = new Date().toISOString().replace(/[-:T.Z]/g, '').slice(0, 14);
+      a.href = URL.createObjectURL(blob);
+      a.download = `wooloop_${pattern.width}x${pattern.height}_${ts}.html`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+      flashEditorMessage('HTML 다운로드됨 ✓');
+    } catch (err) {
+      flashEditorMessage('빌드 실패: ' + err.message);
+    }
+  },
+};
+
+function quantizeToWool(r, g, b) {
+  let best = null, bestDist = Infinity;
+  for (const [key, def] of Object.entries(WOOL)) {
+    const wr = (def.fill >> 16) & 0xff;
+    const wg = (def.fill >> 8)  & 0xff;
+    const wb =  def.fill        & 0xff;
+    const dr = r - wr, dg = g - wg, db = b - wb;
+    const d = dr*dr + dg*dg + db*db;
+    if (d < bestDist) { bestDist = d; best = key; }
+  }
+  return best;
+}
+
+/* =========================================================================
+ *  Resource Upload (drag&drop + file picker) + Auto-trim
+ * ========================================================================= */
+function initResourceUpload() {
+  const dropZone = document.getElementById('drop-zone');
+  const fileInput = document.getElementById('file-input');
+  const targetSel = document.getElementById('upload-target');
+  const resultEl = document.getElementById('upload-result');
+  const trimBtn = document.getElementById('btn-auto-trim');
+  if (!dropZone || !fileInput || !targetSel) return;
+
+  const handle = async (file) => {
+    if (!file) return;
+    try {
+      const target = targetSel.value;
+      const ext = (file.name.split('.').pop() || '').toLowerCase();
+      const isGLB = ext === 'glb' || ext === 'gltf';
+      const isPNG = ext === 'png';
+      if (target.endsWith('GLB') && !isGLB) {
+        flashEditorMessage('이 항목엔 GLB/GLTF 파일이 필요합니다'); return;
+      }
+      if (!target.endsWith('GLB') && !isPNG) {
+        flashEditorMessage('이 항목엔 PNG 파일이 필요합니다'); return;
+      }
+      if (isPNG) {
+        await replacePngTexture(target, file);
+      } else {
+        await replaceGLBAsset(target, file);
+      }
+      if (resultEl) resultEl.textContent = `✓ ${target} ← ${file.name} (${(file.size/1024).toFixed(1)}KB)`;
+      flashEditorMessage('업로드 적용됨 ✓');
+    } catch (err) {
+      flashEditorMessage('업로드 실패: ' + err.message);
+      console.warn('upload error', err);
+    }
+  };
+
+  dropZone.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', (e) => { handle(e.target.files[0]); fileInput.value = ''; });
+  dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+  dropZone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dropZone.classList.remove('dragover');
+    handle(e.dataTransfer.files[0]);
+  });
+
+  if (trimBtn) {
+    trimBtn.addEventListener('click', async () => {
+      const target = targetSel.value;
+      if (target.endsWith('GLB')) { flashEditorMessage('PNG 자산에만 적용됩니다'); return; }
+      try {
+        await autoTrimTexture(target);
+        flashEditorMessage('잉여 공간 제거 ✓');
+      } catch (err) {
+        flashEditorMessage('실패: ' + err.message);
+      }
+    });
+  }
+}
+
+async function replacePngTexture(targetKey, file) {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((res, rej) => {
+      const i = new Image();
+      i.onload = () => res(i);
+      i.onerror = (e) => rej(new Error('이미지 로드 실패'));
+      i.src = url;
+    });
+    const cv = document.createElement('canvas');
+    cv.width = img.width; cv.height = img.height;
+    cv.getContext('2d').drawImage(img, 0, 0);
+    const newTex = PIXI.Texture.from(cv);
+    await rebindTexture(targetKey, newTex);
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+async function replaceGLBAsset(targetKey, file) {
+  if (!window.Three3D) { throw new Error('Three.js 보조 초기화 안 됨'); }
+  const buf = await file.arrayBuffer();
+  const loader = new THREE.GLTFLoader();
+  const parsed = await new Promise((res, rej) => {
+    loader.parse(buf, '', res, rej);
+  });
+  if (targetKey === 'trayGLB') {
+    Three3D.trayGLB = parsed;
+    // Re-render upright + lying tray textures using current Y rotation
+    const newLying = await Three3D.renderTrayAt(EditorTune.trayYRotationDeg, EditorTune.trayTiltDeg, 'lying');
+    const newUpright = await Three3D.renderTrayAt(EditorTune.trayIdleYRotationDeg, 0, 'upright');
+    Game.tex.tray = newLying;
+    Game.tex.trayLying = newLying;
+    Game.tex.trayUpright = newUpright;
+    for (const e of Game.rail) {
+      e.carrier?.refreshTextures?.();
+      e.carrier?.setOrientation?.('lying', true);
+    }
+    for (const f of Game.inFlightCarriers) f.carrier?.refreshTextures?.();
+    redrawDump();
+  } else if (targetKey === 'bobbinGLB') {
+    Three3D.bobbinGLB = parsed;
+    const newLying   = await Three3D.renderBobbinStagesAt(EditorTune.bobbinYRotationDeg, 'lying');
+    const newUpright = await Three3D.renderBobbinStagesAt(EditorTune.bobbinIdleYRotationDeg, 'upright');
+    Game.tex.bobbinStages = newLying;
+    Game.tex.bobbinStagesUpright = newUpright;
+    const all = [];
+    for (const e of Game.queue) all.push(e.bobbin);
+    for (const s of Game.slots) if (s) all.push(s.bobbin);
+    for (const e of Game.rail) all.push(e.bobbin);
+    for (const b of all) b._updateStage?.();
+  }
+}
+
+async function rebindTexture(key, tex) {
+  Game.tex[key] = tex;
+  // Trigger re-draw of affected systems
+  if (key === 'rail') {
+    // Re-build the hoop sprite with the new rail texture
+    if (Game.hoopGfx?.parent) Game.hoopGfx.parent.removeChild(Game.hoopGfx);
+    Game.hoopGfx = null;
+    drawHoop();
+  } else if (key === 'railArrow') {
+    setupRailArrows();
+  } else if (key === 'woolKnot') {
+    // Rebuild wool grid in place
+    if (Game.woolGrid) {
+      Game.layers.wool.removeChildren();
+      Game.woolGrid = new WoolGrid(Game.layers.wool);
+    }
+  } else if (key === 'threadRope') {
+    // Active pull strings use this texture in their rope mode; only new pulls
+    // pick up the change. No immediate rebuild.
+  }
+}
+
+async function autoTrimTexture(key) {
+  const tex = Game.tex[key];
+  if (!tex) throw new Error('해당 자산이 없습니다');
+  const src = tex.baseTexture.resource?.source || tex.baseTexture.resource?.bitmap;
+  if (!src) throw new Error('비트맵 소스를 읽을 수 없습니다');
+  const cv = document.createElement('canvas');
+  cv.width = src.width; cv.height = src.height;
+  const ctx = cv.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(src, 0, 0);
+  const data = ctx.getImageData(0, 0, src.width, src.height).data;
+  let minX = src.width, maxX = -1, minY = src.height, maxY = -1;
+  for (let y = 0; y < src.height; y++) {
+    for (let x = 0; x < src.width; x++) {
+      if (data[(y * src.width + x) * 4 + 3] > 8) {
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+  if (maxX < 0) throw new Error('투명 픽셀만 있음');
+  const cw = maxX - minX + 1;
+  const ch = maxY - minY + 1;
+  const out = document.createElement('canvas');
+  out.width = cw; out.height = ch;
+  out.getContext('2d').drawImage(cv, minX, minY, cw, ch, 0, 0, cw, ch);
+  const newTex = PIXI.Texture.from(out);
+  await rebindTexture(key, newTex);
+}
+
+function flashEditorMessage(msg) {
+  let el = document.getElementById('editor-flash');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'editor-flash';
+    el.style.cssText = 'position:fixed;top:60px;right:18px;z-index:1001;background:rgba(0,160,80,0.92);color:#fff;padding:8px 14px;border-radius:6px;font-size:12px;transition:opacity 0.4s';
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.style.opacity = '1';
+  clearTimeout(el._timer);
+  el._timer = setTimeout(() => { el.style.opacity = '0'; }, 1400);
+}
+
+// Per-key change dispatcher. Most params apply live by being read each frame.
+// Some require a structural rebuild or 3D re-render.
+function applyEditorChange(key) {
+  switch (key) {
+    case 'arrowRadiusX':
+    case 'arrowRadiusY':
+      // Arrow ring shape changed → both arrows AND bobbin path need updating
+      Layout.ringHalfX = Layout.hoop.innerHalf + Layout.hoop.rim * EditorTune.arrowRadiusX;
+      Layout.ringHalfY = Layout.hoop.innerHalf + Layout.hoop.rim * EditorTune.arrowRadiusY;
+      Layout.ringHalf = (Layout.ringHalfX + Layout.ringHalfY) / 2;
+      RailPath.init(Layout.hoop.cx, Layout.hoop.cy, Layout.ringHalfX, Layout.ringHalfY, Layout.hoop.cornerRadius);
+      setupRailArrows();
+      break;
+    case 'arrowSize':
+    case 'arrowCount':
+      setupRailArrows();
+      break;
+    case 'arrowOffsetX':
+    case 'arrowOffsetY':
+      // Live read in arrowPathPosition each frame — nothing to rebuild
+      break;
+    case 'brushOffsetX':
+    case 'brushOffsetY':
+    case 'brushScale':
+      // Reposition / rescale the brush sprite without rebuilding the hoop.
+      if (Game.brushGfx && Game.tex?.railHoop) {
+        const L = Layout.hoop;
+        const baseScale = (L.outerHalf * 2) / Game.tex.railHoop.width;
+        Game.brushGfx.scale.set(baseScale * (EditorTune.brushScale ?? 1));
+        Game.brushGfx.x = L.cx + L.outerHalf * (EditorTune.brushOffsetX ?? -0.78);
+        Game.brushGfx.y = L.cy + L.outerHalf * (EditorTune.brushOffsetY ?? 0.75);
+      }
+      break;
+    case 'bobbinIdleScale':
+    case 'bobbinIdleRotationDeg':
+    case 'bobbinSpriteScale': {
+      const all = [];
+      for (const e of Game.queue) all.push(e.bobbin);
+      for (const s of Game.slots) if (s) all.push(s.bobbin);
+      for (const e of Game.rail) all.push(e.bobbin);
+      for (const b of all) {
+        if (b.updateVisualStyle) b.updateVisualStyle();
+      }
+      break;
+    }
+    case 'dumpX':
+    case 'dumpY':
+      Layout.dump.x = Layout.hoop.cx + Layout.hoop.outerHalf * EditorTune.dumpX;
+      Layout.dump.y = Layout.hoop.cy + Layout.hoop.outerHalf * EditorTune.dumpY;
+      Layout.counter.x = Layout.dump.x + EditorTune.counterOffsetX;
+      Layout.counter.y = Layout.dump.y + EditorTune.counterOffsetY;
+      if (Game.dumpGfx) { Game.dumpGfx.x = Layout.dump.x; Game.dumpGfx.y = Layout.dump.y; }
+      if (Game.counterContainer) {
+        Game.counterContainer.x = Layout.counter.x;
+        Game.counterContainer.y = Layout.counter.y;
+      }
+      redrawDump();
+      break;
+    case 'trayDumpRotationDeg':
+    case 'trayIdleScale':
+    case 'trayScale':
+    case 'trayDumpVisible':
+      redrawDump();
+      for (const e of Game.rail) e.carrier?.updateVisualStyle?.();
+      for (const f of Game.inFlightCarriers) f.carrier?.updateVisualStyle?.();
+      break;
+    case 'trayIdleYRotationDeg':
+    case 'trayIdleXRotationDeg':
+    case 'trayYRotationDeg':
+    case 'trayTiltDeg':
+      reRenderTrayY(EditorTune.trayYRotationDeg, EditorTune.trayTiltDeg, EditorTune.trayIdleYRotationDeg);
+      break;
+    case 'bobbinIdleYRotationDeg':
+    case 'bobbinIdleXRotationDeg':
+    case 'bobbinYRotationDeg':
+    case 'bobbinXRotationDeg':
+      reRenderBobbinsY(EditorTune.bobbinYRotationDeg, EditorTune.bobbinIdleYRotationDeg);
+      break;
+    case 'bobbinRailRotationDeg':
+    case 'trayLaunchedRotationDeg':
+    case 'trayDumpRotationDeg':
+    case 'arrowSecPerLap':
+    case 'arrowHideStart':
+    case 'arrowHideEnd':
+      // Picked up live each frame — nothing to rebuild.
+      break;
+    case 'railOffsetX':
+    case 'railOffsetY':
+    case 'gridScaleX':
+    case 'gridScaleY':
+    case 'gridShiftX':
+    case 'gridShiftY':
+    case 'queueCols':
+    case 'queueGap':
+    case 'queueBobbinScale':
+    case 'queueXOffset':
+    case 'slotSize':
+    case 'slotXOffset':
+    case 'slotYOffset':
+    case 'counterOffsetX':
+    case 'counterOffsetY':
+    case 'counterFontSize':
+      Layout.compute(window.innerWidth, window.innerHeight);
+      if (Game.counterContainer) {
+        Game.counterContainer.x = Layout.counter.x;
+        Game.counterContainer.y = Layout.counter.y;
+      }
+      if (Game.counterText) {
+        Game.counterText.x = 0;
+        Game.counterText.y = 0;
+        Game.counterText.style.fontSize = EditorTune.counterFontSize;
+      }
+      // Slot row: rebuild graphics if the slot SIZE changed (the rect art is
+      // baked, scaling the container would also distort radii). Otherwise just
+      // reposition the existing graphics.
+      if (key === 'slotSize' && Game.slotGfxs?.length) {
+        for (const g of Game.slotGfxs) g.parent?.removeChild(g);
+        Game.slotGfxs.length = 0;
+        // Preserve current bobbin references so the row state isn't lost.
+        const preserved = Game.slots.slice();
+        Game.slots.length = 0;
+        drawSlots();  // rebuilds slotGfxs + pushes new nulls to Game.slots
+        for (let i = 0; i < preserved.length; i++) {
+          Game.slots[i] = preserved[i];
+          if (preserved[i]?.bobbin) {
+            const p = Layout.slotPos(i);
+            preserved[i].bobbin.gfx.x = p.x;
+            preserved[i].bobbin.gfx.y = p.y;
+          }
+        }
+      } else if (Game.slotGfxs?.length) {
+        for (let i = 0; i < Game.slotGfxs.length; i++) {
+          const g = Game.slotGfxs[i];
+          const p = Layout.slotPos(i);
+          g.x = p.x; g.y = p.y;
+        }
+      }
+      // Re-layout queue bobbins
+      if (Game.queue) {
+        const allRows = {};
+        for (const e of Game.queue) {
+          allRows[e.col] = (allRows[e.col] || 0);
+          const pos = Layout.queuePos(e.col, allRows[e.col]);
+          e.bobbin.gfx.x = pos.x;
+          e.bobbin.gfx.y = pos.y;
+          e.bobbin.updateVisualStyle?.();
+          allRows[e.col]++;
+        }
+      }
+      for (const s of Game.slots) s?.bobbin?.updateVisualStyle?.();
+      for (const e of Game.rail) {
+        e.bobbin?.updateVisualStyle?.();
+        e.carrier?.updateVisualStyle?.();
+      }
+      for (const f of Game.inFlightCarriers) {
+        f.bobbin?.updateVisualStyle?.();
+        f.carrier?.updateVisualStyle?.();
+      }
+      redrawDump();
+      // Rail moved? Reposition rail sprite + dump + rail path + chevron arrows.
+      if (key === 'railOffsetX' || key === 'railOffsetY') {
+        if (Game.hoopGfx?.parent) Game.hoopGfx.parent.removeChild(Game.hoopGfx);
+        Game.hoopGfx = null;
+        drawHoop();
+        RailPath.init(Layout.hoop.cx, Layout.hoop.cy, Layout.ringHalfX, Layout.ringHalfY, Layout.hoop.cornerRadius);
+        if (Game.dumpGfx) {
+          Game.dumpGfx.x = Layout.dump.x;
+          Game.dumpGfx.y = Layout.dump.y;
+        }
+      }
+      // Grid area changed → rebuild wool grid with new cellSize / offsets.
+      if (key === 'gridScaleX' || key === 'gridScaleY' ||
+          key === 'gridShiftX' || key === 'gridShiftY' ||
+          key === 'railOffsetX' || key === 'railOffsetY') {
+        if (Game.woolGrid) {
+          Game.layers.wool.removeChildren();
+          Game.woolGrid = new WoolGrid(Game.layers.wool);
+        }
+      }
+      break;
+    // bobbinRailRotationDeg + trayLaunchedRotationDeg + arrowSecPerLap = picked up live
+  }
+}
+
+// Throttle 3D re-renders so rapid slider drags don't pile up.
+let _reRenderTrayPending = null;
+function reRenderTrayY(yDeg, tiltDeg, idleYDeg = EditorTune.trayIdleYRotationDeg) {
+  if (!window.Three3D) return;
+  _reRenderTrayPending = { yDeg, tiltDeg, idleYDeg };
+  if (reRenderTrayY._running) return;
+  reRenderTrayY._running = true;
+  (async () => {
+    while (_reRenderTrayPending !== null) {
+      const target = _reRenderTrayPending;
+      _reRenderTrayPending = null;
+      const newLying = await Three3D.renderTrayAt(target.yDeg, target.tiltDeg, 'lying');
+      const newUpright = await Three3D.renderTrayAt(target.idleYDeg, 0, 'upright');
+      Game.tex.tray = newLying;
+      Game.tex.trayLying = newLying;
+      Game.tex.trayUpright = newUpright;
+      for (const e of Game.rail) {
+        if (e.carrier?.refreshTextures) e.carrier.refreshTextures();
+        if (e.carrier?.setOrientation) e.carrier.setOrientation('lying', true);
+      }
+      for (const f of Game.inFlightCarriers) {
+        if (f.carrier?.refreshTextures) f.carrier.refreshTextures();
+      }
+      redrawDump();
+    }
+    reRenderTrayY._running = false;
+  })();
+}
+
+let _reRenderBobbinPending = null;
+function reRenderBobbinsY(yDeg, idleYDeg = EditorTune.bobbinIdleYRotationDeg) {
+  if (!window.Three3D) return;
+  _reRenderBobbinPending = { yDeg, idleYDeg };
+  if (reRenderBobbinsY._running) return;
+  reRenderBobbinsY._running = true;
+  (async () => {
+    while (_reRenderBobbinPending !== null) {
+      const target = _reRenderBobbinPending;
+      _reRenderBobbinPending = null;
+      const newLying = await Three3D.renderBobbinStagesAt(target.yDeg, 'lying');
+      const newUpright = await Three3D.renderBobbinStagesAt(target.idleYDeg, 'upright');
+      Game.tex.bobbinStages = newLying;
+      Game.tex.bobbinStagesUpright = newUpright;
+      // Update all bobbin sprites' current stage texture
+      const all = [];
+      for (const e of Game.queue) all.push(e.bobbin);
+      for (const s of Game.slots) if (s) all.push(s.bobbin);
+      for (const e of Game.rail) all.push(e.bobbin);
+      for (const b of all) {
+        if (b._updateStage) b._updateStage();
+      }
+    }
+    reRenderBobbinsY._running = false;
+  })();
+}
+
+function applyAllEditorChanges() {
+  // Trigger all the structural / re-render cases. Order doesn't matter — each
+  // case in applyEditorChange is idempotent.
+  applyEditorChange('arrowRadiusX');
+  applyEditorChange('arrowSize');
+  applyEditorChange('arrowCount');
+  applyEditorChange('bobbinIdleScale');
+  applyEditorChange('dumpX');
+  applyEditorChange('trayIdleScale');
+  applyEditorChange('railOffsetX');
+  applyEditorChange('trayIdleYRotationDeg');
+  applyEditorChange('bobbinIdleYRotationDeg');
+  applyLayerOrder();
+}
+
+/* =========================================================================
+ *  Main tick
+ * ========================================================================= */
+function tick(deltaFrames) {
+  if (!Game.ready) return;
+  // PIXI's deltaFrames is fraction of 1/60s
+  const dt = deltaFrames / 60;
+  if (Game.paused) return;
+  // Editor mode freezes all game simulation so the user can edit a static scene.
+  if (window.EditorTool && EditorTool.mode === 'edit') return;
+
+  if (Game.clickCooldownT > 0) Game.clickCooldownT -= dt;
+  if (!Game.boostTriggered && isBoostActive()) {
+    Game.boostTriggered = true;
+    spawnBoostPulse();
+    HapticThrottle.medium();
+  }
+
+  try { tickInFlight(dt); }    catch (e) { console.warn('tickInFlight err', e); }
+  try { tickRail(dt); }        catch (e) { console.warn('tickRail err', e); }
+  try { tickPullFx(dt); }      catch (e) { console.warn('tickPullFx err', e); }
+  try { tickAnims(dt); }       catch (e) { console.warn('tickAnims err', e); }
+  try { tickRailArrows(dt); }  catch (e) { console.warn('tickRailArrows err', e); }
+}
+
+/* =========================================================================
+ *  Init
+ * ========================================================================= */
+window.addEventListener('load', () => {
+  boot().catch(err => {
+    console.error('boot error', err);
+  });
+});
+</script>
+</body>
+</html>
