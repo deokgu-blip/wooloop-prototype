@@ -4,7 +4,7 @@
     {
       "name": "wooloop",
       "runtimeExecutable": "node",
-      "runtimeArgs": ["/tmp/wooloop_link/serve.js"],
+      "runtimeArgs": ["serve.js"],
       "port": 8770
     }
   ]

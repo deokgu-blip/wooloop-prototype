@@ -1,7 +1,9 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const ROOT = '/tmp/wooloop_link';
+// Serve from the directory that holds this file, so the server works no
+// matter where it is checked out (no machine-specific symlinks needed).
+const ROOT = __dirname;
 const PORT = 8770;
 const MIME = {
   '.html': 'text/html; charset=utf-8',
