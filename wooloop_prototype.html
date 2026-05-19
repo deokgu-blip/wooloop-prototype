@@ -658,6 +658,27 @@ let EditorTune = (() => {
   return fresh();
 })();
 
+/* Load editor_tune.json (if it ships with the build / repo) and merge it on
+ * top of localStorage+defaults. Called once before the first render in boot()
+ * so the very first frame uses the committed values. File > localStorage so
+ * a `git pull` of new shared values always wins over stale per-machine state. */
+async function loadEditorTuneFromFile() {
+  try {
+    const res = await fetch('editor_tune.json?t=' + Date.now(), { cache: 'no-store' });
+    if (!res.ok) return false;
+    const parsed = await res.json();
+    if (!parsed || typeof parsed !== 'object') return false;
+    Object.assign(EditorTune, parsed);
+    if (Array.isArray(parsed.layerOrder) && parsed.layerOrder.length) {
+      EditorTune.layerOrder = parsed.layerOrder.slice();
+    }
+    return true;
+  } catch (e) {
+    // Missing file or fetch unsupported (file:// open) — keep current state.
+    return false;
+  }
+}
+
 const deg2rad = (d) => d * Math.PI / 180;
 
 /* --- Palette --- */
@@ -1990,6 +2011,10 @@ async function preRender3DAssets() {
  * ========================================================================= */
 async function boot() {
   GameBridge.init();
+  // Pull committed editor values from the repo BEFORE building the layout so
+  // the first frame already uses them. Falls through silently if the file
+  // isn't there.
+  await loadEditorTuneFromFile();
 
   const app = new PIXI.Application({
     resizeTo: window,
@@ -3411,11 +3436,31 @@ const EditorTool = {
     });
 
     // Save / Reset / Export
-    document.getElementById('ed-save').addEventListener('click', () => {
+    document.getElementById('ed-save').addEventListener('click', async () => {
+      // Always write to localStorage so the next reload restores values even
+      // when the page is opened directly (file://).
+      let local = false;
       try {
         localStorage.setItem('wooloop_editor_tune', JSON.stringify(EditorTune));
-        flashEditorMessage('저장됨 ✓');
-      } catch (err) { flashEditorMessage('저장 실패: ' + err.message); }
+        local = true;
+      } catch (err) { flashEditorMessage('localStorage 저장 실패: ' + err.message); }
+
+      // Also POST to the dev server so editor_tune.json on disk is updated.
+      // That file gets committed to the repo, making the values travel with
+      // a `git pull` to other machines. Silently no-ops if the server isn't
+      // running (e.g. page opened via file://).
+      let file = false;
+      try {
+        const res = await fetch('/save-editor-tune', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(EditorTune),
+        });
+        file = res.ok;
+      } catch (_) { /* no server */ }
+
+      if (file)       flashEditorMessage('저장됨 ✓ (파일 + localStorage)');
+      else if (local) flashEditorMessage('저장됨 ✓ (localStorage only)');
     });
     document.getElementById('ed-reset').addEventListener('click', () => {
       if (!confirm('모든 값을 기본값으로 되돌립니다. 진행할까요?')) return;
