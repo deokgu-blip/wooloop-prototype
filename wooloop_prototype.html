@@ -3821,9 +3821,49 @@ const EditorTool = {
     }
     if (m === 'play') {
       this.gizmoGfx.clear();
+      this._removePreviewRail();
+      // Resume the game when leaving the editor.
+      if (Game) Game.paused = false;
     } else {
+      // Auto-pause + drop a preview bobbin/tray on the rail so the user can
+      // tune rail-state values (trayScale, bobbinSpriteScale, rotations, ...)
+      // without having to actually launch.
+      if (Game) Game.paused = true;
+      this._ensurePreviewRail();
       this.refreshInspector();
     }
+  },
+
+  _ensurePreviewRail() {
+    if (!Game?.rail || Game.rail.length > 0) return;       // already have a real rider
+    if (typeof Bobbin === 'undefined' || typeof Carrier === 'undefined') return;
+    if (typeof spawnRailEntry !== 'function') return;
+    try {
+      const bb = new Bobbin('blue', 40);
+      Game.layers.bobbin.addChild(bb.gfx);
+      const cr = new Carrier('lying');
+      Game.layers.carrier.addChild(cr.gfx);
+      spawnRailEntry(cr, bb, 0.25);                        // bottom-right of rail
+      const entry = Game.rail[Game.rail.length - 1];
+      if (entry) entry.preview = true;
+    } catch (err) { /* preview is best-effort */ }
+  },
+
+  _removePreviewRail() {
+    if (!Game?.rail) return;
+    for (let i = Game.rail.length - 1; i >= 0; i--) {
+      const e = Game.rail[i];
+      if (!e?.preview) continue;
+      if (e.bobbin?.gfx?.parent)  e.bobbin.gfx.parent.removeChild(e.bobbin.gfx);
+      if (e.carrier?.gfx?.parent) e.carrier.gfx.parent.removeChild(e.carrier.gfx);
+      Game.rail.splice(i, 1);
+    }
+  },
+
+  togglePause() {
+    if (!Game) return;
+    Game.paused = !Game.paused;
+    flashEditorMessage?.(Game.paused ? '⏸  일시정지' : '▶  재생');
   },
 
   setGizmoMode(m) {
@@ -3843,6 +3883,11 @@ const EditorTool = {
   getAsset(id) { return this.assets.find(a => a.id === id); },
 
   onKey(e) {
+    const tagAny = e.target?.tagName;
+    if (tagAny === 'INPUT' || tagAny === 'TEXTAREA') return;
+    // Pause shortcut works in BOTH modes so the user can freeze a play
+    // session for inspection without first entering the editor.
+    if (e.code === 'Space') { this.togglePause(); e.preventDefault(); return; }
     if (this.mode !== 'edit') return;
     const tag = e.target?.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA') return;
