@@ -601,6 +601,20 @@ const EDITOR_DEFAULTS = {
   brushOffsetX: -0.78,
   brushOffsetY: 0.75,
   brushScale:   1.0,
+  // Inset background behind the pixel art (the dark navy area inside the hoop).
+  // Color is stored as a 24-bit int; alpha is 0..1.
+  gridBgColor:  0x1e2f5c,
+  gridBgAlpha:  1.0,
+  // Tray Z-axis thickness multiplier (model is x=1.37 y=2.01 z=0.47 — Z is the
+  // shortest "depth" axis, so this scales the tray's flatness independently
+  // of its width/height).
+  trayThickness: 1.0,
+  // 3D Z rotation applied BEFORE the texture render. Independent of the
+  // existing 2D Z rotation (trayDumpRotationDeg / trayLaunchedRotationDeg)
+  // which is applied to the PIXI sprite AFTER render — together they give
+  // more freedom to orient the tray.
+  trayIdleZRotationDeg3D: 0,
+  trayRailZRotationDeg3D: 0,
   // Slot bobbin offset (px) from each slot's center — controls where the
   // bobbin sits on top of its slot square (not the square itself).
   slotBobbinOffsetX: 0,
@@ -2032,11 +2046,17 @@ async function preRender3DAssets() {
       // editor controls direct Y rotation without an implicit +90° offset.
       trayGroup.rotation.y = deg2rad(yDeg || 0);
       trayGroup.rotation.x = deg2rad(EditorTune.trayIdleXRotationDeg || 0);
+      trayGroup.rotation.z = deg2rad(EditorTune.trayIdleZRotationDeg3D || 0);
     } else {
       const tilt = (tiltDeg !== undefined ? tiltDeg : EditorTune.trayTiltDeg);
       trayGroup.rotation.x = -deg2rad(tilt);
       trayGroup.rotation.y = deg2rad(yDeg);
+      trayGroup.rotation.z = deg2rad(EditorTune.trayRailZRotationDeg3D || 0);
     }
+    // Tray thickness: scale the model's Z axis (the shortest dimension) so
+    // the tray reads as thicker or thinner without affecting width/height.
+    const tk = (typeof EditorTune.trayThickness === 'number') ? EditorTune.trayThickness : 1.0;
+    trayGroup.scale.set(1, 1, Math.max(0.05, tk));
     scene.add(trayGroup);
     const tray = trayGLB.scene.clone();
     applyAssetMaterial(tray, 'tray');
@@ -2141,6 +2161,7 @@ async function boot() {
   drawHoop();
   drawDump();
   drawSlots();
+  drawGridBg();
   Game.woolGrid = new WoolGrid(Game.layers.wool);
 
   // Queue (initial bobbins)
@@ -2213,6 +2234,8 @@ function redrawAll() {
   // 2. Wool grid — cellSize / gridOffset depend on the new innerSize.
   if (Game.woolGrid) {
     Game.layers.wool.removeChildren();
+    Game.gridBgGfx = null;  // dropped along with the layer children above
+    drawGridBg();
     Game.woolGrid = new WoolGrid(Game.layers.wool);
   }
 
@@ -2294,6 +2317,29 @@ function applyLayerOrder() {
     const layer = Game.layers[key];
     if (layer && layer.parent === Game.app.stage) Game.app.stage.addChild(layer);
   }
+}
+
+/* Inset rect behind the pixel art so the user can tune the "fabric" color
+ * independently of the hoop frame (which is a baked PNG). Drawn at index 0
+ * of Game.layers.wool so it sits under the WoolGrid knots. */
+function drawGridBg() {
+  if (!Game.layers?.wool) return;
+  // Remove any previous instance.
+  if (Game.gridBgGfx) {
+    if (Game.gridBgGfx.parent) Game.gridBgGfx.parent.removeChild(Game.gridBgGfx);
+    if (!Game.gridBgGfx.destroyed) Game.gridBgGfx.destroy();
+    Game.gridBgGfx = null;
+  }
+  const alpha = (typeof EditorTune.gridBgAlpha === 'number') ? EditorTune.gridBgAlpha : 1;
+  if (alpha <= 0) return;
+  const g = new PIXI.Graphics();
+  const L = Layout.hoop;
+  const corner = Math.max(8, L.innerHalf * 0.06);
+  g.beginFill(EditorTune.gridBgColor ?? 0x1e2f5c, alpha);
+  g.drawRoundedRect(L.cx - L.innerHalf, L.cy - L.innerHalf, L.innerHalf * 2, L.innerHalf * 2, corner);
+  g.endFill();
+  Game.layers.wool.addChildAt(g, 0);
+  Game.gridBgGfx = g;
 }
 
 function drawBackground() {
@@ -3852,7 +3898,8 @@ const EditorTool = {
 
   is3DRotKey(key) {
     return ['bobbinXRotationDeg','bobbinYRotationDeg','bobbinIdleXRotationDeg','bobbinIdleYRotationDeg',
-            'trayYRotationDeg','trayIdleYRotationDeg','trayTiltDeg','trayIdleXRotationDeg'].includes(key);
+            'trayYRotationDeg','trayIdleYRotationDeg','trayTiltDeg','trayIdleXRotationDeg',
+            'trayThickness','trayIdleZRotationDeg3D','trayRailZRotationDeg3D'].includes(key);
   },
 
   apply3DReRender(asset) {
@@ -3874,6 +3921,9 @@ const EditorTool = {
     if (key === 'arrowSecPerLap') return Math.max(0.5, v);
     if (key === 'arrowHideStart' || key === 'arrowHideEnd') return Math.max(0, Math.min(1, v));
     if (key === 'trayDumpVisible') return v >= 0.5 ? 1 : 0;
+    // Color: 24-bit int 0..0xFFFFFF.
+    if (key === 'gridBgColor') return Math.max(0, Math.min(0xFFFFFF, Math.round(v)));
+    if (key === 'gridBgAlpha') return Math.max(0, Math.min(1, v));
     // Free-form offsets and angles: no lower clamp.
     if (/Offset[XY]?$|RotationDeg$|TiltDeg$|^dump[XY]$|^gridShift/.test(key)) return v;
     return Math.max(0.05, v);
@@ -4004,6 +4054,15 @@ const EditorTool = {
     if (a.bindings.extra && a.bindings.extra.length) {
       const rows = a.bindings.extra.map(ext => {
         const v = EditorTune[ext.key];
+        // Color picker: render <input type="color"> with the value as #RRGGBB.
+        if (ext.type === 'color') {
+          const intVal = (typeof v === 'number') ? (v | 0) : 0x000000;
+          const hex = '#' + intVal.toString(16).padStart(6, '0');
+          return `<div class="field-row" style="grid-template-columns: 1fr 80px">
+            <label style="font-size:10.5px;color:#bcd">${ext.label}</label>
+            <input type="color" data-key="${ext.key}" data-extra="1" value="${hex}" style="height:24px;padding:0;border:1px solid #3a4a5a;background:#1f262d">
+          </div>`;
+        }
         const step = ext.step ?? 0.05;
         const min = ext.min != null ? ` min="${ext.min}"` : '';
         const max = ext.max != null ? ` max="${ext.max}"` : '';
@@ -4059,12 +4118,26 @@ const EditorTool = {
 
     ins.innerHTML = sections.join('');
 
-    // Hook number inputs
+    // Hook number + color inputs
     ins.querySelectorAll('input[data-key]').forEach(inp => {
       const key = inp.dataset.key;
       if (!key) return;
+      inp.addEventListener('input', () => {
+        // Color inputs fire 'input' on every drag; numbers also accept input.
+        if (inp.type !== 'color') return;
+        const v = parseInt(inp.value.replace('#', ''), 16);
+        if (!isNaN(v)) {
+          EditorTune[key] = this.clampScale(key, v);
+          applyEditorChange(key);
+        }
+      });
       inp.addEventListener('change', () => {
-        const v = parseFloat(inp.value);
+        let v;
+        if (inp.type === 'color') {
+          v = parseInt(inp.value.replace('#', ''), 16);
+        } else {
+          v = parseFloat(inp.value);
+        }
         if (!isNaN(v)) {
           EditorTune[key] = this.clampScale(key, v);
           applyEditorChange(key);
@@ -4246,6 +4319,10 @@ function buildEditorAssetRegistry() {
       bindings: {
         pos:   { xKey: 'gridShiftX', yKey: 'gridShiftY' },
         scale: { xKey: 'gridScaleX', yKey: 'gridScaleY', xScale: 0.005, yScale: -0.005 },
+        extra: [
+          { key: 'gridBgColor', label: '배경 색', type: 'color' },
+          { key: 'gridBgAlpha', label: '배경 투명도', step: 0.05, min: 0, max: 1 },
+        ],
       },
     },
     {
@@ -4317,6 +4394,8 @@ function buildEditorAssetRegistry() {
                  zKey: 'trayDumpRotationDeg' },
         extra: [
           { key: 'trayDumpVisible', label: '덤프에 표시 (0/1)', step: 1, min: 0, max: 1, int: true },
+          { key: 'trayThickness', label: '트레이 굵기 (Z)', step: 0.05, min: 0.1, max: 4 },
+          { key: 'trayIdleZRotationDeg3D', label: '3D Z 회전 (°)', step: 0.5, min: -180, max: 180 },
         ],
       },
     },
@@ -4334,6 +4413,10 @@ function buildEditorAssetRegistry() {
         rot:   { xKey: 'trayTiltDeg',
                  yKey: 'trayYRotationDeg',
                  zKey: 'trayLaunchedRotationDeg' },
+        extra: [
+          { key: 'trayThickness', label: '트레이 굵기 (Z)', step: 0.05, min: 0.1, max: 4 },
+          { key: 'trayRailZRotationDeg3D', label: '3D Z 회전 (°)', step: 0.5, min: -180, max: 180 },
+        ],
       },
     },
     {
@@ -5063,7 +5146,14 @@ function applyEditorChange(key) {
     case 'trayIdleXRotationDeg':
     case 'trayYRotationDeg':
     case 'trayTiltDeg':
+    case 'trayThickness':
+    case 'trayIdleZRotationDeg3D':
+    case 'trayRailZRotationDeg3D':
       reRenderTrayY(EditorTune.trayYRotationDeg, EditorTune.trayTiltDeg, EditorTune.trayIdleYRotationDeg);
+      break;
+    case 'gridBgColor':
+    case 'gridBgAlpha':
+      drawGridBg();
       break;
     case 'bobbinIdleYRotationDeg':
     case 'bobbinIdleXRotationDeg':
