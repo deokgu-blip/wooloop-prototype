@@ -1887,6 +1887,15 @@ async function preRender3DAssets() {
   camLying.position.set(0, 4.2, 1.55);
   camLying.lookAt(0, 0, 0);
 
+  // Separate lying camera for the tray: tray model X=1.37 / Y=2.01 / Z=0.47
+  // is much smaller (especially after foreshortening) than the bobbin's
+  // flange diameter, so it would fill only ~52% of camLying's frame and
+  // the rendered sprite ended up half the size the user expected from
+  // their trayIdleScale knob. Tighter bounds → tray fills the texture.
+  const camTrayLying = new THREE.OrthographicCamera(-0.82, 0.82, 0.82, -0.82, 0.1, 100);
+  camTrayLying.position.set(0, 4.2, 1.55);
+  camTrayLying.lookAt(0, 0, 0);
+
   const camUpright = new THREE.OrthographicCamera(-1.25, 1.25, 1.25, -1.25, 0.1, 100);
   camUpright.position.set(0, 1.08, 4.35);
   camUpright.lookAt(0, 0.04, 0);
@@ -2079,19 +2088,20 @@ async function preRender3DAssets() {
     addReferenceBobbinShell(group, rings, orientation);
     // Procedural shell meshes were just added; flag them as shadow casters.
     group.traverse(c => { if (c.isMesh) c.castShadow = true; });
-
-    // Ground plane that receives the cast shadow. ShadowMaterial keeps the
-    // plane fully transparent except where shadow falls — so the captured
-    // texture has a soft dark blob silhouetting the bobbin, perfectly
-    // positioned by Three.js' shadow camera.
-    const groundGeo = new THREE.PlaneGeometry(4.5, 4.5);
-    const groundMat = new THREE.ShadowMaterial({ opacity: 0.65 });
-    const ground = new THREE.Mesh(groundGeo, groundMat);
-    ground.rotation.x = -Math.PI / 2;       // lying flat (XZ plane)
-    ground.position.y = -0.78;              // just below the bottom flange
-    ground.receiveShadow = true;
-    group.add(ground);
     return group;
+  };
+
+  // Build a ShadowMaterial ground plane in WORLD space (NOT parented to
+  // the bobbin group — otherwise the lying outer rotation flips the plane
+  // upside-down and the shadow falls on the unseen back face).
+  const makeShadowGround = () => {
+    const geo = new THREE.PlaneGeometry(4.5, 4.5);
+    const mat = new THREE.ShadowMaterial({ opacity: 0.65 });
+    const m = new THREE.Mesh(geo, mat);
+    m.rotation.x = -Math.PI / 2;   // lying flat on XZ
+    m.position.y = -0.78;          // just below the bobbin's bottom flange
+    m.receiveShadow = true;
+    return m;
   };
 
   // Re-render bobbin stages with Y-axis rotation applied.
@@ -2104,6 +2114,10 @@ async function preRender3DAssets() {
       : (EditorTune.bobbinIdleXRotationDeg ?? 0);
     for (let rings = 0; rings <= 10; rings++) {
       clearAddedMeshes();
+      // Ground plane lives in world space (separate from the rotated outer)
+      // so the cast shadow always lands on its UP-facing side regardless of
+      // upright vs lying bobbin orientation.
+      scene.add(makeShadowGround());
       const outer = new THREE.Group();
       if (orientation === 'lying') {
         outer.rotation.z = Math.PI / 2;
@@ -2152,7 +2166,9 @@ async function preRender3DAssets() {
     const tray = trayGLB.scene.clone();
     applyAssetMaterial(tray, 'tray');
     trayGroup.add(tray);
-    const cam = (orientation === 'upright') ? camUpright : camLying;
+    // Tray gets its own tighter lying camera (camTrayLying) so the rendered
+    // sprite has minimal transparent padding — keeps trayIdleScale honest.
+    const cam = (orientation === 'upright') ? camUpright : camTrayLying;
     return await captureToPixiTex(cam);
   };
   const trayLying   = await renderTrayAt(EditorTune.trayYRotationDeg || 0, EditorTune.trayTiltDeg, 'lying');
@@ -2162,7 +2178,7 @@ async function preRender3DAssets() {
   // Keep the Three.js renderer/scene alive globally so we can re-render
   // tray (and bobbin) at different Y rotations when the editor changes them.
   window.Three3D = {
-    renderer, scene, camLying, camUpright,
+    renderer, scene, camLying, camTrayLying, camUpright,
     trayGLB, bobbinGLB,
     buildBobbinGroup, applyAssetMaterial, captureToPixiTex,
     clearAddedMeshes,
