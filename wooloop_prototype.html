@@ -2884,7 +2884,38 @@ function buildCounter() {
 }
 function updateCounter() {
   if (!Game.counterText) return;
+  // Belt-and-braces clamp: even though every +1 site below also clamps,
+  // a race we haven't found could still bump dumpCount above total. Keep
+  // the displayed number honest no matter what — the user saw "6/5" once
+  // and that should never be visible.
+  if (Game.dumpCount > GameTune.carrier.total) {
+    console.warn('[counter] dumpCount overflowed total — clamping', {
+      dumpCount: Game.dumpCount, total: GameTune.carrier.total,
+      rail: Game.rail.length, inFlight: Game.inFlightCarriers.length,
+      slots: Game.slots.filter(s=>s).length,
+    });
+    Game.dumpCount = GameTune.carrier.total;
+  }
+  if (Game.dumpCount < 0) Game.dumpCount = 0;
   Game.counterText.text = `${Game.dumpCount}/${GameTune.carrier.total}`;
+}
+
+// Safe increment helper — keeps dumpCount within [0, total] so no future
+// path can leak the counter past max. All +1 sites use this instead of
+// raw `Game.dumpCount += 1`.
+function addToDumpCount(delta) {
+  const total = GameTune.carrier.total;
+  const next = (Game.dumpCount || 0) + delta;
+  if (delta > 0 && next > total) {
+    console.warn('[counter] suppressed +1 that would have overflowed', {
+      current: Game.dumpCount, attempted: next, total,
+      rail: Game.rail.length, inFlight: Game.inFlightCarriers.length,
+      slots: Game.slots.filter(s=>s).length,
+    });
+    Game.dumpCount = total;
+  } else {
+    Game.dumpCount = Math.max(0, Math.min(total, next));
+  }
 }
 
 function drawSlots() {
@@ -3072,7 +3103,7 @@ function onClickSlot(i) {
 
 function launchBobbin(bobbin) {
   Game.clickCooldownT = GameTune.rail.clickCooldown;
-  Game.dumpCount -= 1;
+  addToDumpCount(-1);
   updateCounter();
   redrawDump();
   AudioSystem.launch(bobbin.color);
@@ -3464,8 +3495,8 @@ function finishBobbinExhausted(entry) {
   const idx = Game.rail.indexOf(entry);
   if (idx >= 0) Game.rail.splice(idx, 1);
 
-  // Carrier is freed immediately (counter +1)
-  Game.dumpCount += 1;
+  // Carrier is freed immediately (counter +1, clamped)
+  addToDumpCount(+1);
   updateCounter();
   redrawDump();
 
@@ -3648,7 +3679,7 @@ function returnCarrierToDump(carrier, duration) {
   }, () => {
     if (carrier.gfx.parent) carrier.gfx.parent.removeChild(carrier.gfx);
     if (!carrier.gfx.destroyed) carrier.gfx.destroy({ children: true });
-    Game.dumpCount += 1;
+    addToDumpCount(+1);
     updateCounter();
     redrawDump();
   });
