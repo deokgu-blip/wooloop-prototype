@@ -644,6 +644,20 @@ const EDITOR_DEFAULTS = {
   bobbinBarrelR:        1.0,
   bobbinFlangeTopH:     1.0,
   bobbinFlangeBottomH:  1.0,
+  // Bobbin shadow (cast onto the ground plane in the 3D pre-render).
+  // Separate knobs for idle (queue/slot) vs rail (lying) so the user can
+  // tune each independently or disable one entirely (opacity 0).
+  //   opacity : 0..1 — darkness of the shadow (ShadowMaterial.opacity)
+  //   angle   : 0..360 deg — direction the shadow falls (0 = no lateral
+  //             offset, 90 = +X, etc.). Larger angle effect = more smear.
+  //   size    : multiplier — bigger value = larger / softer shadow
+  bobbinShadowIdleOpacity: 0.38,
+  bobbinShadowIdleAngle:   30,    // slight forward-right cast
+  bobbinShadowIdleSize:    1.0,
+  bobbinShadowRailOpacity: 0,     // off by default — user thought the
+                                  // rail-state shadow looked odd
+  bobbinShadowRailAngle:   30,
+  bobbinShadowRailSize:    1.0,
   // Launch animation tuning. The tray/bobbin pair lands at this fraction
   // along the rail (0 = bottom-left 7 o'clock entry, 0.05 ≈ a bit past the
   // brush). Bumping it up makes the landing point visibly clear of the
@@ -1920,22 +1934,46 @@ async function preRender3DAssets() {
   dir2.position.set(2, 1.2, -2);
   scene.add(dir2);
 
-  // Dedicated shadow-caster: low-intensity, nearly straight down with a
-  // tiny forward/right offset so the shadow has just enough direction to
-  // look natural without smearing off the bobbin.
-  const shadowLight = new THREE.DirectionalLight(0xffffff, 0);   // intensity 0 = no lighting contribution
-  shadowLight.position.set(0.4, 5.0, 0.6);
+  // Dedicated shadow-caster: low-intensity (= no light contribution), the
+  // position is reset per-render to match the orientation's editor knobs.
+  const shadowLight = new THREE.DirectionalLight(0xffffff, 0);
   shadowLight.castShadow = true;
   shadowLight.shadow.camera.near = 0.5;
-  shadowLight.shadow.camera.far  = 12;
-  shadowLight.shadow.camera.left   = -1.5;
-  shadowLight.shadow.camera.right  =  1.5;
-  shadowLight.shadow.camera.top    =  1.5;
-  shadowLight.shadow.camera.bottom = -1.5;
+  shadowLight.shadow.camera.far  = 14;
+  shadowLight.shadow.camera.left   = -1.8;
+  shadowLight.shadow.camera.right  =  1.8;
+  shadowLight.shadow.camera.top    =  1.8;
+  shadowLight.shadow.camera.bottom = -1.8;
   shadowLight.shadow.mapSize.set(2048, 2048);
   shadowLight.shadow.radius = 4;        // soft penumbra
   shadowLight.shadow.bias = -0.0005;
   scene.add(shadowLight);
+
+  // Per-orientation shadow update. Called before each bobbin stage render
+  // so the same `shadowLight` casts a different-looking shadow for idle
+  // vs rail (matches each state's editor knobs).
+  const configureShadow = (orientation) => {
+    const isRail = orientation === 'lying';
+    const angleDeg = isRail
+      ? (EditorTune.bobbinShadowRailAngle ?? 30)
+      : (EditorTune.bobbinShadowIdleAngle ?? 30);
+    const sizeMul = isRail
+      ? (EditorTune.bobbinShadowRailSize ?? 1)
+      : (EditorTune.bobbinShadowIdleSize ?? 1);
+    // Larger sizeMul → light closer to ground → bigger softer shadow.
+    const lightY = 6.0 / Math.max(0.3, sizeMul);
+    const radius = 0.5 * sizeMul;
+    const a = deg2rad(angleDeg);
+    shadowLight.position.set(Math.sin(a) * radius, lightY, Math.cos(a) * radius);
+    shadowLight.shadow.radius = 3 * sizeMul;
+  };
+  const configureShadowGround = (groundMesh, orientation) => {
+    const op = (orientation === 'lying')
+      ? (EditorTune.bobbinShadowRailOpacity ?? 0.38)
+      : (EditorTune.bobbinShadowIdleOpacity ?? 0.38);
+    groundMesh.material.opacity = Math.max(0, Math.min(1, op));
+    groundMesh.visible = op > 0.001;
+  };
 
   const makeMaterial = (kind = 'bobbin') => {
     if (kind === 'tray') {
@@ -2128,12 +2166,18 @@ async function preRender3DAssets() {
     const xDeg = orientation === 'lying'
       ? (EditorTune.bobbinXRotationDeg ?? -6)
       : (EditorTune.bobbinIdleXRotationDeg ?? 0);
+    // Configure the shadow light + ground for this orientation once per
+    // stage batch (ortho/angle/size only depends on orientation, not on
+    // the ring count).
+    configureShadow(orientation);
     for (let rings = 0; rings <= 10; rings++) {
       clearAddedMeshes();
       // Ground plane lives in world space (separate from the rotated outer)
       // so the cast shadow always lands on its UP-facing side regardless of
       // upright vs lying bobbin orientation.
-      scene.add(makeShadowGround());
+      const ground = makeShadowGround();
+      configureShadowGround(ground, orientation);
+      scene.add(ground);
       const outer = new THREE.Group();
       if (orientation === 'lying') {
         outer.rotation.z = Math.PI / 2;
@@ -4630,9 +4674,12 @@ function buildEditorAssetRegistry() {
                  yKey: 'bobbinIdleYRotationDeg',
                  zKey: 'bobbinIdleRotationDeg' },
         extra: [
-          { key: 'bobbinBarrelR',       label: '중앙 기둥 굵기',  step: 0.05, min: 0.2, max: 3 },
-          { key: 'bobbinFlangeTopH',    label: '상단 굵기',        step: 0.05, min: 0.1, max: 5 },
-          { key: 'bobbinFlangeBottomH', label: '하단 굵기',        step: 0.05, min: 0.1, max: 5 },
+          { key: 'bobbinBarrelR',           label: '중앙 기둥 굵기',  step: 0.05, min: 0.2, max: 3 },
+          { key: 'bobbinFlangeTopH',        label: '상단 굵기',        step: 0.05, min: 0.1, max: 5 },
+          { key: 'bobbinFlangeBottomH',     label: '하단 굵기',        step: 0.05, min: 0.1, max: 5 },
+          { key: 'bobbinShadowIdleOpacity', label: '그림자 강도',       step: 0.02, min: 0,   max: 1 },
+          { key: 'bobbinShadowIdleAngle',   label: '그림자 각도 (°)',   step: 1,    min: 0,   max: 360 },
+          { key: 'bobbinShadowIdleSize',    label: '그림자 크기',       step: 0.05, min: 0.2, max: 3 },
         ],
       },
     },
@@ -4655,6 +4702,9 @@ function buildEditorAssetRegistry() {
           { key: 'bobbinRailBarrelR',       label: '중앙 기둥 굵기',  step: 0.05, min: 0.2, max: 3 },
           { key: 'bobbinRailFlangeTopH',    label: '상단 굵기',        step: 0.05, min: 0.1, max: 5 },
           { key: 'bobbinRailFlangeBottomH', label: '하단 굵기',        step: 0.05, min: 0.1, max: 5 },
+          { key: 'bobbinShadowRailOpacity', label: '그림자 강도',       step: 0.02, min: 0,   max: 1 },
+          { key: 'bobbinShadowRailAngle',   label: '그림자 각도 (°)',   step: 1,    min: 0,   max: 360 },
+          { key: 'bobbinShadowRailSize',    label: '그림자 크기',       step: 0.05, min: 0.2, max: 3 },
         ],
       },
     },
@@ -5458,9 +5508,16 @@ function applyEditorChange(key) {
     case 'bobbinRailBarrelR':
     case 'bobbinRailFlangeTopH':
     case 'bobbinRailFlangeBottomH':
-      // Procedural shell changes need re-render of the 3D bobbin texture
-      // (and downstream sprites). Idle keys re-render upright stages, rail
-      // keys re-render lying stages — reRenderBobbinsY does both.
+    case 'bobbinShadowIdleOpacity':
+    case 'bobbinShadowIdleAngle':
+    case 'bobbinShadowIdleSize':
+    case 'bobbinShadowRailOpacity':
+    case 'bobbinShadowRailAngle':
+    case 'bobbinShadowRailSize':
+      // Procedural shell + shadow setup are baked into the pre-rendered
+      // bobbin textures, so any of these requires re-rendering. Idle keys
+      // re-render upright stages, rail keys re-render lying stages —
+      // reRenderBobbinsY does both.
       reRenderBobbinsY(EditorTune.bobbinYRotationDeg, EditorTune.bobbinIdleYRotationDeg);
       break;
     case 'bobbinIdleYRotationDeg':
