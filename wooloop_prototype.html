@@ -1216,8 +1216,9 @@ class WoolGrid {
   }
 
   _build() {
-    const fabricAlpha = (typeof EditorTune.gridFabricAlpha === 'number') ? EditorTune.gridFabricAlpha : 0;
-    const fabricColor = (typeof EditorTune.gridFabricColor === 'number') ? EditorTune.gridFabricColor : 0x1f70e6;
+    // Empty cells stay transparent — drawGridBg() tiles fabric knots across
+    // the ENTIRE inner area beneath the WoolGrid, so we don't need to draw
+    // anything here for null cells.
     for (let r = 0; r < PATTERN.height; r++) {
       const row = [];
       for (let c = 0; c < PATTERN.width; c++) {
@@ -1245,23 +1246,6 @@ class WoolGrid {
             const g = new PIXI.Graphics();
             this._drawWoolKnot(g, WOOL[color]);
             node.addChild(g);
-          }
-        } else if (fabricAlpha > 0) {
-          // Background "fabric": empty cells get a tinted wool knot so the
-          // pixel art sits on a woven blue field (matching reference).
-          const base = new PIXI.Graphics();
-          base.beginFill(fabricColor, fabricAlpha);
-          const s = Layout.cellSize * 1.02;
-          base.drawRect(-s/2, -s/2, s, s);
-          base.endFill();
-          node.addChild(base);
-          if (Game.tex?.woolKnot) {
-            const sp = new PIXI.Sprite(Game.tex.woolKnot);
-            sp.anchor.set(0.5);
-            sp.width = sp.height = Layout.cellSize * GRID_WOOL_SPRITE_MULT;
-            sp.tint = fabricColor;
-            sp.alpha = fabricAlpha;
-            node.addChild(sp);
           }
         }
         this.layerCells.addChild(node);
@@ -2362,27 +2346,87 @@ function applyLayerOrder() {
   }
 }
 
-/* Inset rect behind the pixel art so the user can tune the "fabric" color
- * independently of the hoop frame (which is a baked PNG). Drawn at index 0
- * of Game.layers.wool so it sits under the WoolGrid knots. */
+/* Inset background behind the pixel art. Two layers:
+ *   1) Solid rounded rect (gridBg) — fills the entire inner area.
+ *   2) Optional fabric grid — wool-knot sprites tiled across the entire
+ *      inner area, aligned with the pattern grid so pattern knots and
+ *      fabric knots share a single grid (no seam where they meet).
+ * Sits at index 0 of Game.layers.wool so WoolGrid's pattern knots draw
+ * on top. Use a rounded-rect mask so fabric knots don't bleed past the
+ * inner-area border into the hoop frame. */
 function drawGridBg() {
   if (!Game.layers?.wool) return;
-  // Remove any previous instance.
   if (Game.gridBgGfx) {
     if (Game.gridBgGfx.parent) Game.gridBgGfx.parent.removeChild(Game.gridBgGfx);
-    if (!Game.gridBgGfx.destroyed) Game.gridBgGfx.destroy();
+    if (!Game.gridBgGfx.destroyed) Game.gridBgGfx.destroy({ children: true });
     Game.gridBgGfx = null;
   }
-  const alpha = (typeof EditorTune.gridBgAlpha === 'number') ? EditorTune.gridBgAlpha : 1;
-  if (alpha <= 0) return;
-  const g = new PIXI.Graphics();
+
+  const bgAlpha     = (typeof EditorTune.gridBgAlpha     === 'number') ? EditorTune.gridBgAlpha     : 1;
+  const fabricAlpha = (typeof EditorTune.gridFabricAlpha === 'number') ? EditorTune.gridFabricAlpha : 0;
+  if (bgAlpha <= 0 && fabricAlpha <= 0) return;
+
   const L = Layout.hoop;
   const corner = Math.max(8, L.innerHalf * 0.06);
-  g.beginFill(EditorTune.gridBgColor ?? 0x1e2f5c, alpha);
-  g.drawRoundedRect(L.cx - L.innerHalf, L.cy - L.innerHalf, L.innerHalf * 2, L.innerHalf * 2, corner);
-  g.endFill();
-  Game.layers.wool.addChildAt(g, 0);
-  Game.gridBgGfx = g;
+  const innerLeft   = L.cx - L.innerHalf;
+  const innerTop    = L.cy - L.innerHalf;
+  const innerRight  = L.cx + L.innerHalf;
+  const innerBottom = L.cy + L.innerHalf;
+
+  const container = new PIXI.Container();
+
+  // 1) Solid color underneath (shows through when fabric alpha < 1, or
+  //    in the corners if the fabric mask trims something).
+  if (bgAlpha > 0) {
+    const g = new PIXI.Graphics();
+    g.beginFill(EditorTune.gridBgColor ?? 0x1e2f5c, bgAlpha);
+    g.drawRoundedRect(innerLeft, innerTop, L.innerHalf * 2, L.innerHalf * 2, corner);
+    g.endFill();
+    container.addChild(g);
+  }
+
+  // 2) Fabric knots tiled across the entire inner area (matches reference).
+  if (fabricAlpha > 0 && Game.tex?.woolKnot && Layout.cellSize > 0) {
+    const cellSize = Layout.cellSize;
+    // Anchor the fabric grid on the same lattice as the pattern grid so
+    // pattern cells and fabric cells line up perfectly. The first pattern
+    // cell's center is at innerLeft + gridOffsetX + 0.5*cellSize.
+    const baseX = innerLeft + Layout.gridOffsetX + 0.5 * cellSize;
+    const baseY = innerTop  + Layout.gridOffsetY + 0.5 * cellSize;
+    // Range of integer steps that covers the inner area (plus a 1-cell
+    // pad so the knots' rendered footprint extends fully to the border).
+    const minNX = Math.floor((innerLeft   - baseX) / cellSize) - 1;
+    const maxNX = Math.ceil ((innerRight  - baseX) / cellSize) + 1;
+    const minNY = Math.floor((innerTop    - baseY) / cellSize) - 1;
+    const maxNY = Math.ceil ((innerBottom - baseY) / cellSize) + 1;
+
+    const tint  = EditorTune.gridFabricColor ?? 0x1f70e6;
+    const tiles = new PIXI.Container();
+    for (let ny = minNY; ny <= maxNY; ny++) {
+      for (let nx = minNX; nx <= maxNX; nx++) {
+        const sp = new PIXI.Sprite(Game.tex.woolKnot);
+        sp.anchor.set(0.5);
+        sp.width = sp.height = cellSize * GRID_WOOL_SPRITE_MULT;
+        sp.x = baseX + nx * cellSize;
+        sp.y = baseY + ny * cellSize;
+        sp.tint = tint;
+        sp.alpha = fabricAlpha;
+        tiles.addChild(sp);
+      }
+    }
+    // Clip the tiled fabric to the rounded inner-area shape so the rect
+    // edges don't poke past the hoop frame's rounded corners.
+    const mask = new PIXI.Graphics();
+    mask.beginFill(0xffffff);
+    mask.drawRoundedRect(innerLeft, innerTop, L.innerHalf * 2, L.innerHalf * 2, corner);
+    mask.endFill();
+    container.addChild(mask);
+    tiles.mask = mask;
+    container.addChild(tiles);
+  }
+
+  Game.layers.wool.addChildAt(container, 0);
+  Game.gridBgGfx = container;
 }
 
 function drawBackground() {
@@ -5209,13 +5253,8 @@ function applyEditorChange(key) {
       break;
     case 'gridFabricColor':
     case 'gridFabricAlpha':
-      // Fabric is baked into WoolGrid's cell containers — rebuild.
-      if (Game.woolGrid && Game.layers?.wool) {
-        Game.layers.wool.removeChildren();
-        Game.gridBgGfx = null;
-        drawGridBg();
-        Game.woolGrid = new WoolGrid(Game.layers.wool);
-      }
+      // Fabric lives in drawGridBg's tile grid — just redraw that.
+      drawGridBg();
       break;
     case 'trayStackSpacing':
       // Just the dump visual — the rail trays aren't stacked.
