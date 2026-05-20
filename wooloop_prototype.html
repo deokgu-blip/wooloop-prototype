@@ -605,6 +605,12 @@ const EDITOR_DEFAULTS = {
   // Color is stored as a 24-bit int; alpha is 0..1.
   gridBgColor:  0x1e2f5c,
   gridBgAlpha:  1.0,
+  // Fabric "weave": when alpha > 0, every empty cell in the pixel-art grid
+  // renders a tinted wool knot in this color. Match the reference's blue
+  // background behind the chicken. Set alpha to 0 for a transparent grid
+  // (i.e., show only the solid gridBg color).
+  gridFabricColor: 0x1f70e6,
+  gridFabricAlpha: 1.0,
   // Tray Z-axis thickness multiplier (model is x=1.37 y=2.01 z=0.47 — Z is the
   // shortest "depth" axis, so this scales the tray's flatness independently
   // of its width/height).
@@ -1210,6 +1216,8 @@ class WoolGrid {
   }
 
   _build() {
+    const fabricAlpha = (typeof EditorTune.gridFabricAlpha === 'number') ? EditorTune.gridFabricAlpha : 0;
+    const fabricColor = (typeof EditorTune.gridFabricColor === 'number') ? EditorTune.gridFabricColor : 0x1f70e6;
     for (let r = 0; r < PATTERN.height; r++) {
       const row = [];
       for (let c = 0; c < PATTERN.width; c++) {
@@ -1237,6 +1245,23 @@ class WoolGrid {
             const g = new PIXI.Graphics();
             this._drawWoolKnot(g, WOOL[color]);
             node.addChild(g);
+          }
+        } else if (fabricAlpha > 0) {
+          // Background "fabric": empty cells get a tinted wool knot so the
+          // pixel art sits on a woven blue field (matching reference).
+          const base = new PIXI.Graphics();
+          base.beginFill(fabricColor, fabricAlpha);
+          const s = Layout.cellSize * 1.02;
+          base.drawRect(-s/2, -s/2, s, s);
+          base.endFill();
+          node.addChild(base);
+          if (Game.tex?.woolKnot) {
+            const sp = new PIXI.Sprite(Game.tex.woolKnot);
+            sp.anchor.set(0.5);
+            sp.width = sp.height = Layout.cellSize * GRID_WOOL_SPRITE_MULT;
+            sp.tint = fabricColor;
+            sp.alpha = fabricAlpha;
+            node.addChild(sp);
           }
         }
         this.layerCells.addChild(node);
@@ -3941,8 +3966,8 @@ const EditorTool = {
     if (key === 'arrowHideStart' || key === 'arrowHideEnd') return Math.max(0, Math.min(1, v));
     if (key === 'trayDumpVisible') return v >= 0.5 ? 1 : 0;
     // Color: 24-bit int 0..0xFFFFFF.
-    if (key === 'gridBgColor') return Math.max(0, Math.min(0xFFFFFF, Math.round(v)));
-    if (key === 'gridBgAlpha') return Math.max(0, Math.min(1, v));
+    if (key === 'gridBgColor' || key === 'gridFabricColor') return Math.max(0, Math.min(0xFFFFFF, Math.round(v)));
+    if (key === 'gridBgAlpha' || key === 'gridFabricAlpha') return Math.max(0, Math.min(1, v));
     // Free-form offsets and angles: no lower clamp.
     if (/Offset[XY]?$|RotationDeg$|TiltDeg$|^dump[XY]$|^gridShift/.test(key)) return v;
     return Math.max(0.05, v);
@@ -4339,8 +4364,10 @@ function buildEditorAssetRegistry() {
         pos:   { xKey: 'gridShiftX', yKey: 'gridShiftY' },
         scale: { xKey: 'gridScaleX', yKey: 'gridScaleY', xScale: 0.005, yScale: -0.005 },
         extra: [
-          { key: 'gridBgColor', label: '배경 색', type: 'color' },
-          { key: 'gridBgAlpha', label: '배경 투명도', step: 0.05, min: 0, max: 1 },
+          { key: 'gridBgColor',     label: '배경 색 (인셋)',   type: 'color' },
+          { key: 'gridBgAlpha',     label: '배경 투명도',       step: 0.05, min: 0, max: 1 },
+          { key: 'gridFabricColor', label: '직물 색 (빈 셀)',   type: 'color' },
+          { key: 'gridFabricAlpha', label: '직물 투명도',       step: 0.05, min: 0, max: 1 },
         ],
       },
     },
@@ -5179,6 +5206,16 @@ function applyEditorChange(key) {
     case 'gridBgColor':
     case 'gridBgAlpha':
       drawGridBg();
+      break;
+    case 'gridFabricColor':
+    case 'gridFabricAlpha':
+      // Fabric is baked into WoolGrid's cell containers — rebuild.
+      if (Game.woolGrid && Game.layers?.wool) {
+        Game.layers.wool.removeChildren();
+        Game.gridBgGfx = null;
+        drawGridBg();
+        Game.woolGrid = new WoolGrid(Game.layers.wool);
+      }
       break;
     case 'trayStackSpacing':
       // Just the dump visual — the rail trays aren't stacked.
