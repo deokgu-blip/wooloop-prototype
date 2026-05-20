@@ -1873,12 +1873,11 @@ async function preRender3DAssets() {
   renderer.setPixelRatio(2);
   renderer.outputEncoding = THREE.sRGBEncoding;
   renderer.setClearColor(0x000000, 0);
-  // Enable shadow mapping so the bobbin can cast a real shadow on its
-  // ground plane (baked into the pre-render texture). PCF (non-soft)
-  // keeps the shadow contour crisp — soft variants washed out at the
-  // small sprite sizes the texture renders at.
+  // Shadow mapping: soft penumbra so the bobbin reads as having a gentle
+  // drop shadow underneath, not a hard-edged directional cast that looks
+  // pasted-on at sprite sizes.
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFShadowMap;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
   // Two cameras:
   //   camLying — high oblique view for bobbins/trays lying on rail
@@ -1910,24 +1909,33 @@ async function preRender3DAssets() {
   const scene = new THREE.Scene();
   const ambient = new THREE.AmbientLight(0xffffff, 0.72);
   scene.add(ambient);
+  // Visual key + fill lights — these only handle colour/highlights, they
+  // do NOT cast shadow. Shadow comes from a separate near-overhead light
+  // (below) so the cast shadow sits gently under each bobbin instead of
+  // smearing far to one side.
   const dir1 = new THREE.DirectionalLight(0xffffff, 1.05);
   dir1.position.set(-2.5, 4.0, 3.0);
-  // Main key light → casts the bobbin's real shadow. Tight orthographic
-  // bounds (just enough to enclose the bobbin) so the shadow map is
-  // high-resolution for the bobbin area, giving a crisp ground shadow.
-  dir1.castShadow = true;
-  dir1.shadow.camera.near = 0.5;
-  dir1.shadow.camera.far  = 10;
-  dir1.shadow.camera.left   = -1.5;
-  dir1.shadow.camera.right  =  1.5;
-  dir1.shadow.camera.top    =  1.5;
-  dir1.shadow.camera.bottom = -1.5;
-  dir1.shadow.mapSize.set(2048, 2048);
-  dir1.shadow.bias = -0.0003;
   scene.add(dir1);
   const dir2 = new THREE.DirectionalLight(0x9fd3ff, 0.32);
   dir2.position.set(2, 1.2, -2);
   scene.add(dir2);
+
+  // Dedicated shadow-caster: low-intensity, nearly straight down with a
+  // tiny forward/right offset so the shadow has just enough direction to
+  // look natural without smearing off the bobbin.
+  const shadowLight = new THREE.DirectionalLight(0xffffff, 0);   // intensity 0 = no lighting contribution
+  shadowLight.position.set(0.4, 5.0, 0.6);
+  shadowLight.castShadow = true;
+  shadowLight.shadow.camera.near = 0.5;
+  shadowLight.shadow.camera.far  = 12;
+  shadowLight.shadow.camera.left   = -1.5;
+  shadowLight.shadow.camera.right  =  1.5;
+  shadowLight.shadow.camera.top    =  1.5;
+  shadowLight.shadow.camera.bottom = -1.5;
+  shadowLight.shadow.mapSize.set(2048, 2048);
+  shadowLight.shadow.radius = 4;        // soft penumbra
+  shadowLight.shadow.bias = -0.0005;
+  scene.add(shadowLight);
 
   const makeMaterial = (kind = 'bobbin') => {
     if (kind === 'tray') {
@@ -2100,10 +2108,11 @@ async function preRender3DAssets() {
 
   // Build a ShadowMaterial ground plane in WORLD space (NOT parented to
   // the bobbin group — otherwise the lying outer rotation flips the plane
-  // upside-down and the shadow falls on the unseen back face).
+  // upside-down and the shadow falls on the unseen back face). Opacity
+  // tuned to read as a gentle drop shadow, not a hard-edged silhouette.
   const makeShadowGround = () => {
     const geo = new THREE.PlaneGeometry(4.5, 4.5);
-    const mat = new THREE.ShadowMaterial({ opacity: 0.65 });
+    const mat = new THREE.ShadowMaterial({ opacity: 0.38 });
     const m = new THREE.Mesh(geo, mat);
     m.rotation.x = -Math.PI / 2;   // lying flat on XZ
     m.position.y = -0.78;          // just below the bobbin's bottom flange
