@@ -644,11 +644,14 @@ const EDITOR_DEFAULTS = {
   bobbinBarrelR:        1.0,
   bobbinFlangeTopH:     1.0,
   bobbinFlangeBottomH:  1.0,
-  // Rail tray flat toggle. When true (default), the in-flight + on-rail
-  // tray is always rendered fully horizontal regardless of trayTiltDeg
-  // / trayLaunchedRotationDeg — eliminates the awkward "vertical-then-
-  // suddenly-horizontal" look the user reported. Disable to get back
-  // the user-tuned partial tilt.
+  // Rail tray flat toggle. When true (default), the lying tray is baked
+  // with X tilt = 90° so the rail tray always reads as a flat horizontal
+  // plate, regardless of the upright trayTiltDeg the user picked for the
+  // dump stack. Only the X tilt is locked — trayLaunchedRotationDeg (2D
+  // screen-space rotation of the carrier sprite) still applies on top so
+  // the user can rotate the tray's facing direction on the rail without
+  // resurrecting the "vertical-then-suddenly-horizontal" bug. Disable to
+  // get back the user-tuned partial tilt.
   trayRailFlat: 1,
   // Bobbin shadow (cast onto the ground plane in the 3D pre-render).
   // Separate knobs for idle (queue/slot) vs rail (lying) so the user can
@@ -3185,11 +3188,14 @@ function tickRail(dt) {
     const pos = RailPath.position(e.t);
     e.carrier.gfx.x = pos.x;
     e.carrier.gfx.y = pos.y;
-    // trayRailFlat forces the carrier to align with the rail direction
-    // ONLY (no extra trayLaunchedRotationDeg). Keeps the tray flat to
-    // the rail at all times.
-    const flatRail = (EditorTune.trayRailFlat ?? 1) >= 0.5;
-    e.carrier.gfx.rotation = pos.angle + (flatRail ? 0 : deg2rad(EditorTune.trayLaunchedRotationDeg));
+    // trayLaunchedRotationDeg is ALWAYS applied as a 2D screen-space rotation
+    // of the carrier sprite — it's how the user controls "which direction
+    // does the tray face on the rail" (e.g. 0 = long edge follows the rail,
+    // 90 = long edge perpendicular to the rail). trayRailFlat now only
+    // governs the 3D X-axis tilt baked into the texture; it doesn't lock
+    // the screen rotation. Previously the flat mode silenced this knob,
+    // which left the user with no rotation control at all.
+    e.carrier.gfx.rotation = pos.angle + deg2rad(EditorTune.trayLaunchedRotationDeg);
     e.bobbin.gfx.x = pos.x;
     e.bobbin.gfx.y = pos.y + (EditorTune.bobbinOnTrayOffsetY || 0);
     // Bobbin follows the carrier direction (+ optional tuneable offset)
@@ -3648,8 +3654,11 @@ function tickInFlight(dt) {
       f.carrier.gfx.y = q(f.fromCarrierPos.y, ctrlY, sp.y, trayU);
       // Carrier is already in lying form (see launchBobbin) — keep its 2D
       // rotation locked to the rail angle the whole time so the tray slides
-      // cleanly without any "tilting up from the bottom" effect.
-      f.carrier.gfx.rotation = sp.angle;
+      // cleanly without any "tilting up from the bottom" effect. Also add
+      // trayLaunchedRotationDeg so the in-flight tray matches the on-rail
+      // facing direction (otherwise the tray would visibly snap rotation
+      // the moment it crosses from launching to on-rail).
+      f.carrier.gfx.rotation = sp.angle + deg2rad(EditorTune.trayLaunchedRotationDeg);
 
       if (!f.bobbinLaid && u > 0.48) {
         f.bobbinLaid = true;
@@ -4809,11 +4818,11 @@ function buildEditorAssetRegistry() {
         extra: [
           { key: 'trayThickness',          label: '트레이 굵기 (Z)',           step: 0.05, min: 0.1,  max: 4 },
           { key: 'trayIdleZRotationDeg3D', label: '3D Z 회전 (°)',             step: 0.5,  min: -180, max: 180 },
-          // When 1, rail tray is forced fully horizontal regardless of the
-          // upright X-tilt above — eliminates the "vertical-then-suddenly-
-          // horizontal" look when trayTiltDeg is partly upright. Turn off
-          // to recover the raw X-tilt look on the rail.
-          { key: 'trayRailFlat',           label: '레일 평평 (가로형)',         step: 1,    min: 0,    max: 1, int: true },
+          // When 1, the lying tray is baked with X tilt = 90° (full flat
+          // plate), regardless of the upright trayTiltDeg above. The
+          // 회전 Z (trayLaunchedRotationDeg) knob STILL rotates the tray
+          // on screen — flat mode only forces the tilt, not the facing.
+          { key: 'trayRailFlat',           label: '레일 평평 (기울기만 고정)',  step: 1,    min: 0,    max: 1, int: true },
         ],
       },
     },
