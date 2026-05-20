@@ -651,8 +651,11 @@ const EDITOR_DEFAULTS = {
   launchEndT: 0.05,
   // Vertical offset (px) of the bobbin from the carrier center on the
   // rail. Negative = bobbin sits visually ABOVE the tray (mimics "riding
-  // on top"). Applied to both the in-flight tween and tickRail.
-  bobbinOnTrayOffsetY: 0,
+  // on top"). The tray is foreshortened by the lying camera, so its
+  // visible height is much shorter than the bobbin's — without an offset
+  // the bobbin would fully cover the tray. Default -15 pushes the bobbin
+  // up so the tray's lower lip stays visible underneath.
+  bobbinOnTrayOffsetY: -15,
   // Rail-state (lying) bobbin shell multipliers — tuned independently from
   // the upright idle bobbin. Default 1.0 = same as idle.
   bobbinRailBarrelR:        1.0,
@@ -1462,7 +1465,10 @@ class Bobbin {
     const s = this.shadow;
     s.clear();
     const size = Layout.bobbinSize;
-    const scale = isWaiting ? EditorTune.bobbinIdleScale : EditorTune.bobbinSpriteScale;
+    // Unified: bobbinIdleScale controls both upright (queue/slot) AND lying
+    // (rail) bobbins so a single knob in the editor scales everything. The
+    // legacy bobbinSpriteScale survives only as a fallback for older saves.
+    const scale = EditorTune.bobbinIdleScale ?? EditorTune.bobbinSpriteScale;
     // Place at the base of the rendered sprite. The upright camera puts the
     // bobbin's foot ~38% below the sprite center; the lying camera ~32%.
     const baseY = isWaiting ? size * scale * 0.46 : size * scale * 0.40;
@@ -1491,7 +1497,10 @@ class Bobbin {
 
   updateVisualStyle() {
     const isWaiting = this.orientation !== 'lying';
-    const scale = isWaiting ? EditorTune.bobbinIdleScale : EditorTune.bobbinSpriteScale;
+    // Unified: bobbinIdleScale controls both upright (queue/slot) AND lying
+    // (rail) bobbins so a single knob in the editor scales everything. The
+    // legacy bobbinSpriteScale survives only as a fallback for older saves.
+    const scale = EditorTune.bobbinIdleScale ?? EditorTune.bobbinSpriteScale;
     this.spin.rotation = isWaiting ? deg2rad(EditorTune.bobbinIdleRotationDeg || 0) : 0;
     if (this.sprite) {
       this.sprite.width = this.sprite.height = Layout.bobbinSize * scale;
@@ -1760,11 +1769,11 @@ class Carrier {
   }
   updateVisualStyle() {
     if (!this.upright || !this.lying) return;
-    // Lying tray uses its OWN scale (trayScale) so the user can make it
-    // visibly wider than the bobbin on the rail — otherwise the bobbin
-    // sprite (bobbinSize × bobbinSpriteScale) covers the tray entirely.
-    // Falls back to trayIdleScale when trayScale isn't set.
-    const lyingSize = Layout.bobbinSize * (EditorTune.trayScale ?? EditorTune.trayIdleScale);
+    // Unified: trayIdleScale controls both dump (upright) AND rail (lying)
+    // trays. Adjusting "트레이 (대기) 크기" or "트레이 (레일) 크기" both edit
+    // the same value now. Legacy trayScale only matters when trayIdleScale
+    // is missing on very old saves.
+    const lyingSize = Layout.bobbinSize * (EditorTune.trayIdleScale ?? EditorTune.trayScale);
     this.upright.scale.set(EditorTune.trayIdleScale);
     this.lying.width = this.lying.height = lyingSize;
     this.upright.rotation = deg2rad(EditorTune.trayDumpRotationDeg || 0);
@@ -2912,10 +2921,13 @@ function launchBobbin(bobbin) {
   redrawDump();
   AudioSystem.launch(bobbin.color);
 
-  // Phase 1: spawn carrier from dump (starts upright like a card) and slide it
-  // along the rail. landingT controls how far past the rail entry the launch
-  // ends — bumping it past ~0.04 puts the bobbin clear of the brush sprite.
-  const carrier = new Carrier('upright');
+  // Phase 1: spawn carrier from dump — already in the LYING (flat) form so
+  // the launching tray reads as a single piece sliding cleanly forward
+  // (reference behaviour). The dump's upright "card" sprites are separate
+  // and stay in the stack; only the in-flight tray uses the lying art.
+  // landingT controls how far past the rail entry the launch ends — past
+  // ~0.04 puts the landed bobbin clear of the brush sprite.
+  const carrier = new Carrier('lying');
   carrier.gfx.x = Layout.dump.x;
   carrier.gfx.y = Layout.dump.y;
   Game.layers.carrier.addChild(carrier.gfx);
@@ -3497,10 +3509,12 @@ function tickInFlight(dt) {
       const ctrlX = 2 * trayMid.x - 0.5 * (f.fromCarrierPos.x + sp.x);
       const ctrlY = 2 * trayMid.y - 0.5 * (f.fromCarrierPos.y + sp.y);
       const trayU = phaseEase(u, 0.14, 0.92);
-      const lieU = phaseEase(u, 0.34, 0.92);
       f.carrier.gfx.x = q(f.fromCarrierPos.x, ctrlX, sp.x, trayU);
       f.carrier.gfx.y = q(f.fromCarrierPos.y, ctrlY, sp.y, trayU);
-      f.carrier.gfx.rotation = lerp(deg2rad(EditorTune.trayDumpRotationDeg || 0), sp.angle, lieU);
+      // Carrier is already in lying form (see launchBobbin) — keep its 2D
+      // rotation locked to the rail angle the whole time so the tray slides
+      // cleanly without any "tilting up from the bottom" effect.
+      f.carrier.gfx.rotation = sp.angle;
 
       if (!f.bobbinLaid && u > 0.48) {
         f.bobbinLaid = true;
@@ -3516,8 +3530,6 @@ function tickInFlight(dt) {
       const bobbinRot = lerp(0, sp.angle + deg2rad(EditorTune.bobbinRailRotationDeg), phaseEase(u, 0.48, 0.95));
       f.bobbin.gfx.rotation = bobbinRot;
       if (f.bobbin.badgeGroup) f.bobbin.badgeGroup.rotation = -bobbinRot;
-      // Cross-fade tray from upright → lying during the launch tween.
-      if (f.carrier.applyFade) f.carrier.applyFade('upright', 'lying', lieU);
       if (u >= 1) {
         Game.inFlightCarriers.splice(i, 1);
         // Hand off to the rail at the landing point — NOT t=0, so motion
@@ -4532,13 +4544,14 @@ function buildEditorAssetRegistry() {
       id: 'bobbinRail', name: '보빈 (레일)', is3D: true,
       bounds: () => {
         const ref = Game.rail?.[0]?.bobbin?.gfx;
-        const size = Math.max(40, Layout.bobbinSize * (EditorTune.bobbinSpriteScale || 1) * 1.1);
+        const size = Math.max(40, Layout.bobbinSize * (EditorTune.bobbinIdleScale || 1) * 1.1);
         const cx = ref?.x ?? (Layout.hoop.cx - Layout.ringHalfX);
         const cy = ref?.y ?? Layout.hoop.cy;
         return { x: cx - size/2, y: cy - size/2, w: size, h: size };
       },
       bindings: {
-        scale: { uKey: 'bobbinSpriteScale' },
+        // Shared with the idle bobbin — single source of truth.
+        scale: { uKey: 'bobbinIdleScale' },
         rot:   { xKey: 'bobbinXRotationDeg',
                  yKey: 'bobbinYRotationDeg',
                  zKey: 'bobbinRailRotationDeg' },
