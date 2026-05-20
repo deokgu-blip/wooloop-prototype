@@ -615,6 +615,19 @@ const EDITOR_DEFAULTS = {
   // more freedom to orient the tray.
   trayIdleZRotationDeg3D: 0,
   trayRailZRotationDeg3D: 0,
+  // Vertical gap multiplier between trays in the dump stack. 1.0 = baseline,
+  // <1 brings them closer, >1 spreads them apart.
+  trayStackSpacing: 1.0,
+  // Bobbin shell tuning — multipliers on the procedural shell parts that
+  // ride on top of the GLB model.
+  //   bobbinBarrelR        : central column radius (also acts as inner wool
+  //                          edge when there's no wool yet).
+  //   bobbinFlangeTopH     : top flange thickness.
+  //   bobbinFlangeBottomH  : bottom flange thickness.
+  // Default 1.0 = current geometry, so no visual shift until the user moves.
+  bobbinBarrelR:        1.0,
+  bobbinFlangeTopH:     1.0,
+  bobbinFlangeBottomH:  1.0,
   // Slot bobbin offset (px) from each slot's center — controls where the
   // bobbin sits on top of its slot square (not the square itself).
   slotBobbinOffsetX: 0,
@@ -1652,10 +1665,12 @@ function drawReferenceTrayStack(container, count) {
 
   // Vertical card-stack: backmost first so the foreground tray (i = 0) sits
   // on top. Offsets are in pixel multiples of the sprite size so the stack
-  // scales with Layout.bobbinSize / EditorTune.trayIdleScale.
+  // scales with Layout.bobbinSize / EditorTune.trayIdleScale. The 0.18 base
+  // matches the original spacing; trayStackSpacing scales it.
   const visible = Math.max(0, Math.min(GameTune.carrier.total, count));
+  const stackSpacing = 0.18 * (EditorTune.trayStackSpacing ?? 1.0);
   for (let i = visible - 1; i >= 0; i--) {
-    const off = i * s * 0.18;
+    const off = i * s * stackSpacing;
     if (tex) {
       const sp = new PIXI.Sprite(tex);
       sp.anchor.set(0.5);
@@ -1937,14 +1952,17 @@ async function preRender3DAssets() {
     const consumed = clamp(rings / 10, 0, 1);
 
     // Reference bobbin: longer central barrel + slightly thinner flanges.
+    // EditorTune multipliers (default 1.0) let the user tune each piece
+    // independently without touching the source geometry.
     const FLANGE_R_TOP = 0.88;
     const FLANGE_R_BOTTOM = 0.92;
-    const FLANGE_H = 0.15;
+    const TOP_H = 0.15 * (EditorTune.bobbinFlangeTopH ?? 1.0);
+    const BOT_H = 0.15 * (EditorTune.bobbinFlangeBottomH ?? 1.0);
     const BARREL_H = 1.18;           // was 0.84 — extended per reference
-    const BARREL_R = 0.34;           // thinner so wool stands out around it
-    const HALF_Y = BARREL_H / 2 + FLANGE_H / 2;
+    const BARREL_R = 0.34 * (EditorTune.bobbinBarrelR ?? 1.0);
 
-    const flangeGeo = new THREE.CylinderGeometry(FLANGE_R_TOP, FLANGE_R_BOTTOM, FLANGE_H, 72);
+    const topFlangeGeo = new THREE.CylinderGeometry(FLANGE_R_TOP, FLANGE_R_BOTTOM, TOP_H, 72);
+    const botFlangeGeo = new THREE.CylinderGeometry(FLANGE_R_TOP, FLANGE_R_BOTTOM, BOT_H, 72);
     const barrelGeo = new THREE.CylinderGeometry(BARREL_R, BARREL_R * 1.04, BARREL_H, 64);
 
     // Wool grows out from the barrel surface as the bobbin is used.
@@ -1954,8 +1972,8 @@ async function preRender3DAssets() {
     const woolH = BARREL_H * 0.92;
     const woolGeo = new THREE.CylinderGeometry(woolR, woolR * 0.98, woolH, 72);
 
-    const bottom = new THREE.Mesh(flangeGeo, bobbinShellMat);
-    bottom.position.y = -HALF_Y;
+    const bottom = new THREE.Mesh(botFlangeGeo, bobbinShellMat);
+    bottom.position.y = -(BARREL_H / 2 + BOT_H / 2);
     group.add(bottom);
 
     const barrel = new THREE.Mesh(barrelGeo, bobbinShellMat);
@@ -1987,8 +2005,8 @@ async function preRender3DAssets() {
       }
     }
 
-    const top = new THREE.Mesh(flangeGeo, bobbinShellMat);
-    top.position.y = HALF_Y;
+    const top = new THREE.Mesh(topFlangeGeo, bobbinShellMat);
+    top.position.y = BARREL_H / 2 + TOP_H / 2;
     group.add(top);
   };
 
@@ -3899,7 +3917,8 @@ const EditorTool = {
   is3DRotKey(key) {
     return ['bobbinXRotationDeg','bobbinYRotationDeg','bobbinIdleXRotationDeg','bobbinIdleYRotationDeg',
             'trayYRotationDeg','trayIdleYRotationDeg','trayTiltDeg','trayIdleXRotationDeg',
-            'trayThickness','trayIdleZRotationDeg3D','trayRailZRotationDeg3D'].includes(key);
+            'trayThickness','trayIdleZRotationDeg3D','trayRailZRotationDeg3D',
+            'bobbinBarrelR','bobbinFlangeTopH','bobbinFlangeBottomH'].includes(key);
   },
 
   apply3DReRender(asset) {
@@ -4361,6 +4380,11 @@ function buildEditorAssetRegistry() {
         rot:   { xKey: 'bobbinIdleXRotationDeg',
                  yKey: 'bobbinIdleYRotationDeg',
                  zKey: 'bobbinIdleRotationDeg' },
+        extra: [
+          { key: 'bobbinBarrelR',       label: '중앙 기둥 굵기',  step: 0.05, min: 0.2, max: 3 },
+          { key: 'bobbinFlangeTopH',    label: '상단 굵기',        step: 0.05, min: 0.1, max: 5 },
+          { key: 'bobbinFlangeBottomH', label: '하단 굵기',        step: 0.05, min: 0.1, max: 5 },
+        ],
       },
     },
     {
@@ -4393,9 +4417,10 @@ function buildEditorAssetRegistry() {
                  yKey: 'trayIdleYRotationDeg',
                  zKey: 'trayDumpRotationDeg' },
         extra: [
-          { key: 'trayDumpVisible', label: '덤프에 표시 (0/1)', step: 1, min: 0, max: 1, int: true },
-          { key: 'trayThickness', label: '트레이 굵기 (Z)', step: 0.05, min: 0.1, max: 4 },
-          { key: 'trayIdleZRotationDeg3D', label: '3D Z 회전 (°)', step: 0.5, min: -180, max: 180 },
+          { key: 'trayDumpVisible',         label: '덤프에 표시 (0/1)', step: 1,    min: 0,    max: 1, int: true },
+          { key: 'trayThickness',           label: '트레이 굵기 (Z)',   step: 0.05, min: 0.1,  max: 4 },
+          { key: 'trayIdleZRotationDeg3D',  label: '3D Z 회전 (°)',     step: 0.5,  min: -180, max: 180 },
+          { key: 'trayStackSpacing',        label: '트레이 간격',        step: 0.05, min: 0,    max: 4 },
         ],
       },
     },
@@ -5154,6 +5179,17 @@ function applyEditorChange(key) {
     case 'gridBgColor':
     case 'gridBgAlpha':
       drawGridBg();
+      break;
+    case 'trayStackSpacing':
+      // Just the dump visual — the rail trays aren't stacked.
+      redrawDump();
+      break;
+    case 'bobbinBarrelR':
+    case 'bobbinFlangeTopH':
+    case 'bobbinFlangeBottomH':
+      // Procedural shell changes need re-render of the 3D bobbin texture
+      // (and downstream sprites).
+      reRenderBobbinsY(EditorTune.bobbinYRotationDeg, EditorTune.bobbinIdleYRotationDeg);
       break;
     case 'bobbinIdleYRotationDeg':
     case 'bobbinIdleXRotationDeg':
