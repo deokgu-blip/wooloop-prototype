@@ -1696,13 +1696,16 @@ function drawReferenceTrayStack(container, count) {
   shadow.endFill();
   stack.addChild(shadow);
 
-  // Vertical card-stack: backmost first so the foreground tray (i = 0) sits
-  // on top. Offsets are in pixel multiples of the sprite size so the stack
-  // scales with Layout.bobbinSize / EditorTune.trayIdleScale. The 0.18 base
-  // matches the original spacing; trayStackSpacing scales it.
-  const visible = Math.max(0, Math.min(GameTune.carrier.total, count));
+  // Card-stack: backmost (highest i) rendered first so the foreground (i=0)
+  // sits on top z-order. The slot at i=0 is anchored at the dump center
+  // (which is where the launching tray spawns from), so we render only the
+  // BACK `visible` slots — the FRONT slot empties out first when a tray
+  // launches, matching "the front tray flies away" behaviour.
+  const total = GameTune.carrier.total;
+  const visible = Math.max(0, Math.min(total, count));
   const stackSpacing = 0.18 * (EditorTune.trayStackSpacing ?? 1.0);
-  for (let i = visible - 1; i >= 0; i--) {
+  const minI = total - visible;       // highest empty slot index above (e.g. 5−4 = 1: i=0 empty)
+  for (let i = total - 1; i >= minI; i--) {
     const off = i * s * stackSpacing;
     if (tex) {
       const sp = new PIXI.Sprite(tex);
@@ -1757,10 +1760,11 @@ class Carrier {
   }
   updateVisualStyle() {
     if (!this.upright || !this.lying) return;
-    // Rail-state (lying) tray now shares the idle tray's scale so a single
-    // knob controls both. Legacy trayScale is preserved as a fallback only
-    // when trayIdleScale is missing.
-    const lyingSize = Layout.bobbinSize * (EditorTune.trayIdleScale ?? EditorTune.trayScale);
+    // Lying tray uses its OWN scale (trayScale) so the user can make it
+    // visibly wider than the bobbin on the rail — otherwise the bobbin
+    // sprite (bobbinSize × bobbinSpriteScale) covers the tray entirely.
+    // Falls back to trayIdleScale when trayScale isn't set.
+    const lyingSize = Layout.bobbinSize * (EditorTune.trayScale ?? EditorTune.trayIdleScale);
     this.upright.scale.set(EditorTune.trayIdleScale);
     this.lying.width = this.lying.height = lyingSize;
     this.upright.rotation = deg2rad(EditorTune.trayDumpRotationDeg || 0);
