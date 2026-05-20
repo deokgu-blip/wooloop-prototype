@@ -605,12 +605,22 @@ const EDITOR_DEFAULTS = {
   // Color is stored as a 24-bit int; alpha is 0..1.
   gridBgColor:  0x1e2f5c,
   gridBgAlpha:  1.0,
-  // Fabric "weave": when alpha > 0, every empty cell in the pixel-art grid
-  // renders a tinted wool knot in this color. Match the reference's blue
-  // background behind the chicken. Set alpha to 0 for a transparent grid
-  // (i.e., show only the solid gridBg color).
+  // Optional fabric overlay: tints wool-knot sprites across the inset. The
+  // reference renders a clean inset color *behind* the pattern, so this is
+  // off by default (alpha 0). Enable via the editor to layer a woven look.
   gridFabricColor: 0x1f70e6,
-  gridFabricAlpha: 1.0,
+  gridFabricAlpha: 0,
+  // The bg/fabric rect normally covers a square of side innerHalf*2. These
+  // pads extend each side outward by (pad × hoop.rim), separately on the X
+  // and Y axes, so the bg can reach (or even overflow) the rail's painted
+  // inner edge. 0 = legacy. Legacy gridBgPad below is kept only as a
+  // migration source for older saved tunes.
+  gridBgPad:  0.45,
+  gridBgPadX: 0.45,
+  gridBgPadY: 0.45,
+  // Corner roundness of the inset, as a fraction of the smaller bgHalf.
+  // 0 = sharp square corners, 0.5 = fully rounded (≈ a stadium / circle).
+  gridBgCornerRadius: 0.06,
   // Tray Z-axis thickness multiplier (model is x=1.37 y=2.01 z=0.47 — Z is the
   // shortest "depth" axis, so this scales the tray's flatness independently
   // of its width/height).
@@ -634,6 +644,20 @@ const EDITOR_DEFAULTS = {
   bobbinBarrelR:        1.0,
   bobbinFlangeTopH:     1.0,
   bobbinFlangeBottomH:  1.0,
+  // Launch animation tuning. The tray/bobbin pair lands at this fraction
+  // along the rail (0 = bottom-left 7 o'clock entry, 0.05 ≈ a bit past the
+  // brush). Bumping it up makes the landing point visibly clear of the
+  // brush sprite so users actually see the bobbin sitting on the tray.
+  launchEndT: 0.05,
+  // Vertical offset (px) of the bobbin from the carrier center on the
+  // rail. Negative = bobbin sits visually ABOVE the tray (mimics "riding
+  // on top"). Applied to both the in-flight tween and tickRail.
+  bobbinOnTrayOffsetY: 0,
+  // Rail-state (lying) bobbin shell multipliers — tuned independently from
+  // the upright idle bobbin. Default 1.0 = same as idle.
+  bobbinRailBarrelR:        1.0,
+  bobbinRailFlangeTopH:     1.0,
+  bobbinRailFlangeBottomH:  1.0,
   // Slot bobbin offset (px) from each slot's center — controls where the
   // bobbin sits on top of its slot square (not the square itself).
   slotBobbinOffsetX: 0,
@@ -1733,7 +1757,10 @@ class Carrier {
   }
   updateVisualStyle() {
     if (!this.upright || !this.lying) return;
-    const lyingSize = Layout.bobbinSize * EditorTune.trayScale;
+    // Rail-state (lying) tray now shares the idle tray's scale so a single
+    // knob controls both. Legacy trayScale is preserved as a fallback only
+    // when trayIdleScale is missing.
+    const lyingSize = Layout.bobbinSize * (EditorTune.trayIdleScale ?? EditorTune.trayScale);
     this.upright.scale.set(EditorTune.trayIdleScale);
     this.lying.width = this.lying.height = lyingSize;
     this.upright.rotation = deg2rad(EditorTune.trayDumpRotationDeg || 0);
@@ -1951,7 +1978,7 @@ async function preRender3DAssets() {
     metalness: 0.01,
   });
 
-  const addReferenceBobbinShell = (group, rings) => {
+  const addReferenceBobbinShell = (group, rings, orientation /* 'upright' | 'lying' */) => {
     // `rings` is the pre-render stage index (0..10). In _updateStage:
     //   full bobbin  (count = initialCount, ratio=0) → idx=1 → rings=1
     //   empty bobbin (count = 0,            ratio=1) → idx=10 → rings=10
@@ -1965,10 +1992,16 @@ async function preRender3DAssets() {
     // independently without touching the source geometry.
     const FLANGE_R_TOP = 0.88;
     const FLANGE_R_BOTTOM = 0.92;
-    const TOP_H = 0.15 * (EditorTune.bobbinFlangeTopH ?? 1.0);
-    const BOT_H = 0.15 * (EditorTune.bobbinFlangeBottomH ?? 1.0);
+    // Pick the orientation-specific tune set so rail and idle bobbins can
+    // be shaped differently without re-rendering both.
+    const isRail = orientation === 'lying';
+    const topMul   = (isRail ? EditorTune.bobbinRailFlangeTopH    : EditorTune.bobbinFlangeTopH)    ?? 1.0;
+    const botMul   = (isRail ? EditorTune.bobbinRailFlangeBottomH : EditorTune.bobbinFlangeBottomH) ?? 1.0;
+    const barrelMul = (isRail ? EditorTune.bobbinRailBarrelR      : EditorTune.bobbinBarrelR)       ?? 1.0;
+    const TOP_H = 0.15 * topMul;
+    const BOT_H = 0.15 * botMul;
     const BARREL_H = 1.18;           // was 0.84 — extended per reference
-    const BARREL_R = 0.34 * (EditorTune.bobbinBarrelR ?? 1.0);
+    const BARREL_R = 0.34 * barrelMul;
 
     const topFlangeGeo = new THREE.CylinderGeometry(FLANGE_R_TOP, FLANGE_R_BOTTOM, TOP_H, 72);
     const botFlangeGeo = new THREE.CylinderGeometry(FLANGE_R_TOP, FLANGE_R_BOTTOM, BOT_H, 72);
@@ -2021,13 +2054,13 @@ async function preRender3DAssets() {
 
   // Helper to build a bobbin plus procedural wound-thread volume.
   // External wool-ring GLB files are intentionally not used.
-  const buildBobbinGroup = (rings) => {
+  const buildBobbinGroup = (rings, orientation) => {
     const group = new THREE.Group();
     const bobbin = bobbinGLB.scene.clone();
     applyAssetMaterial(bobbin, 'bobbin');
     bobbin.scale.set(0.34, 0.34, 0.34);
     group.add(bobbin);
-    addReferenceBobbinShell(group, rings);
+    addReferenceBobbinShell(group, rings, orientation);
     return group;
   };
 
@@ -2048,7 +2081,7 @@ async function preRender3DAssets() {
       outer.rotation.x = deg2rad(orientation === 'lying' ? -xDeg : xDeg);
       outer.rotation.y = deg2rad(yDeg);
       scene.add(outer);
-      outer.add(buildBobbinGroup(rings));
+      outer.add(buildBobbinGroup(rings, orientation));
       newStages.push(await captureToPixiTex(orientation === 'lying' ? camLying : camUpright));
     }
     return newStages;
@@ -2078,7 +2111,8 @@ async function preRender3DAssets() {
       const tilt = (tiltDeg !== undefined ? tiltDeg : EditorTune.trayTiltDeg);
       trayGroup.rotation.x = -deg2rad(tilt);
       trayGroup.rotation.y = deg2rad(yDeg);
-      trayGroup.rotation.z = deg2rad(EditorTune.trayRailZRotationDeg3D || 0);
+      // Rail-state tray shares the idle tray's 3D-Z rotation key.
+      trayGroup.rotation.z = deg2rad(EditorTune.trayIdleZRotationDeg3D || 0);
     }
     // Tray thickness: scale the model's Z axis (the shortest dimension) so
     // the tray reads as thicker or thinner without affecting width/height.
@@ -2367,11 +2401,22 @@ function drawGridBg() {
   if (bgAlpha <= 0 && fabricAlpha <= 0) return;
 
   const L = Layout.hoop;
-  const corner = Math.max(8, L.innerHalf * 0.06);
-  const innerLeft   = L.cx - L.innerHalf;
-  const innerTop    = L.cy - L.innerHalf;
-  const innerRight  = L.cx + L.innerHalf;
-  const innerBottom = L.cy + L.innerHalf;
+  // Expand the bg/fabric rect outward by pad × rim on each axis. Per-axis
+  // pads let the inset stretch independently horizontally vs vertically;
+  // fall back to the unified gridBgPad for older saved tunes.
+  const padFallback = EditorTune.gridBgPad ?? 0;
+  const padX = (EditorTune.gridBgPadX ?? padFallback) * (L.rim || 0);
+  const padY = (EditorTune.gridBgPadY ?? padFallback) * (L.rim || 0);
+  const bgHalfX = L.innerHalf + padX;
+  const bgHalfY = L.innerHalf + padY;
+  // Corner radius as a fraction of the smaller half so a circle is still
+  // achievable when the rect is non-square. Clamped to [0, 0.5].
+  const cornerFrac = Math.max(0, Math.min(0.5, EditorTune.gridBgCornerRadius ?? 0.06));
+  const corner = cornerFrac * Math.min(bgHalfX, bgHalfY);
+  const innerLeft   = L.cx - bgHalfX;
+  const innerTop    = L.cy - bgHalfY;
+  const innerRight  = L.cx + bgHalfX;
+  const innerBottom = L.cy + bgHalfY;
 
   const container = new PIXI.Container();
 
@@ -2380,7 +2425,7 @@ function drawGridBg() {
   if (bgAlpha > 0) {
     const g = new PIXI.Graphics();
     g.beginFill(EditorTune.gridBgColor ?? 0x1e2f5c, bgAlpha);
-    g.drawRoundedRect(innerLeft, innerTop, L.innerHalf * 2, L.innerHalf * 2, corner);
+    g.drawRoundedRect(innerLeft, innerTop, bgHalfX * 2, bgHalfY * 2, corner);
     g.endFill();
     container.addChild(g);
   }
@@ -2418,7 +2463,7 @@ function drawGridBg() {
     // edges don't poke past the hoop frame's rounded corners.
     const mask = new PIXI.Graphics();
     mask.beginFill(0xffffff);
-    mask.drawRoundedRect(innerLeft, innerTop, L.innerHalf * 2, L.innerHalf * 2, corner);
+    mask.drawRoundedRect(innerLeft, innerTop, bgHalfX * 2, bgHalfY * 2, corner);
     mask.endFill();
     container.addChild(mask);
     tiles.mask = mask;
@@ -2863,13 +2908,16 @@ function launchBobbin(bobbin) {
   redrawDump();
   AudioSystem.launch(bobbin.color);
 
-  // Phase 1: spawn carrier from dump (starts upright like a card) and slide it to 7-o'clock.
+  // Phase 1: spawn carrier from dump (starts upright like a card) and slide it
+  // along the rail. landingT controls how far past the rail entry the launch
+  // ends — bumping it past ~0.04 puts the bobbin clear of the brush sprite.
   const carrier = new Carrier('upright');
   carrier.gfx.x = Layout.dump.x;
   carrier.gfx.y = Layout.dump.y;
   Game.layers.carrier.addChild(carrier.gfx);
 
-  const startPos = RailPath.position(0);
+  const landingT = clamp(EditorTune.launchEndT ?? 0.05, 0, 0.95);
+  const startPos = RailPath.position(landingT);
   spawnLaunchGlow(startPos.x, startPos.y, bobbin.color);
 
   // Bobbin: float up to carrier
@@ -2885,11 +2933,13 @@ function launchBobbin(bobbin) {
     carrier,
     bobbin,
     fromCarrierPos: { x: Layout.dump.x, y: Layout.dump.y },
+    // Via-point the tray must pass THROUGH at u=0.5 (not just curve toward).
+    // Bigger X offset = more visible slide out of the brush.
     trayBoardPos: {
       x: Layout.dump.x + Layout.bobbinSize * 1.05,
       y: Layout.dump.y + Layout.bobbinSize * 0.38,
     },
-    toRailT: 0,
+    landingT,
     bobbinFrom: bobbinStart,
     railStart: startPos,
     bobbinLaid: false,
@@ -2932,12 +2982,8 @@ function phaseEase(u, start, end) {
 }
 
 /* --- Rail entry handling --- */
-function spawnRailEntry(carrier, bobbin) {
-  // Determine starting t such that it leaves a 1-cell gap behind the most-recent bobbin on rail
-  let startT = 0;
-  if (Game.rail.length > 0) {
-    startT = 0;
-  }
+function spawnRailEntry(carrier, bobbin, initialT = 0) {
+  const startT = clamp(initialT, 0, 0.95);
   // Bobbin switches to LYING orientation when placed on rail
   if (bobbin.setOrientation) bobbin.setOrientation('lying');
   // Ensure carrier is fully laid down by the time it joins the rail.
@@ -2953,11 +2999,12 @@ function spawnRailEntry(carrier, bobbin) {
   Game.rail.push(entry);
   // Place carrier and bobbin on rail
   const pos = RailPath.position(startT);
+  const onTopY = EditorTune.bobbinOnTrayOffsetY || 0;
   carrier.gfx.x = pos.x;
   carrier.gfx.y = pos.y;
   carrier.gfx.rotation = pos.angle;
   bobbin.gfx.x = pos.x;
-  bobbin.gfx.y = pos.y;
+  bobbin.gfx.y = pos.y + onTopY;
 }
 
 function tickRail(dt) {
@@ -2993,7 +3040,7 @@ function tickRail(dt) {
     e.carrier.gfx.y = pos.y;
     e.carrier.gfx.rotation = pos.angle + deg2rad(EditorTune.trayLaunchedRotationDeg);
     e.bobbin.gfx.x = pos.x;
-    e.bobbin.gfx.y = pos.y;
+    e.bobbin.gfx.y = pos.y + (EditorTune.bobbinOnTrayOffsetY || 0);
     // Bobbin follows the carrier direction (+ optional tuneable offset)
     e.bobbin.gfx.rotation = pos.angle + deg2rad(EditorTune.bobbinRailRotationDeg);
     // Keep label upright (counter-rotate the bobbin's parent rotation)
@@ -3435,16 +3482,20 @@ function tickInFlight(dt) {
     if (f.phase === 'launching') {
       f.t += dt;
       const u = clamp(f.t / f.duration, 0, 1);
-      const sp = RailPath.position(0);
+      const sp = f.railStart || RailPath.position(f.landingT ?? 0);
+      // Quadratic Bezier that PASSES THROUGH the via-point at trayU = 0.5,
+      // not just curves toward it. Control = 2*via - 0.5*(start+end).
       const q = (a, b, c, t) => lerp(lerp(a, b, t), lerp(b, c, t), t);
       const trayMid = f.trayBoardPos || {
         x: lerp(f.fromCarrierPos.x, sp.x, 0.45),
         y: lerp(f.fromCarrierPos.y, sp.y, 0.45),
       };
+      const ctrlX = 2 * trayMid.x - 0.5 * (f.fromCarrierPos.x + sp.x);
+      const ctrlY = 2 * trayMid.y - 0.5 * (f.fromCarrierPos.y + sp.y);
       const trayU = phaseEase(u, 0.14, 0.92);
       const lieU = phaseEase(u, 0.34, 0.92);
-      f.carrier.gfx.x = q(f.fromCarrierPos.x, trayMid.x, sp.x, trayU);
-      f.carrier.gfx.y = q(f.fromCarrierPos.y, trayMid.y, sp.y, trayU);
+      f.carrier.gfx.x = q(f.fromCarrierPos.x, ctrlX, sp.x, trayU);
+      f.carrier.gfx.y = q(f.fromCarrierPos.y, ctrlY, sp.y, trayU);
       f.carrier.gfx.rotation = lerp(deg2rad(EditorTune.trayDumpRotationDeg || 0), sp.angle, lieU);
 
       if (!f.bobbinLaid && u > 0.48) {
@@ -3454,8 +3505,10 @@ function tickInFlight(dt) {
       const bobbinU = phaseEase(u, 0.05, 0.95);
       const bxMid = Math.min(f.bobbinFrom.x, sp.x) - Layout.bobbinSize * 0.22;
       const byMid = lerp(f.bobbinFrom.y, sp.y, 0.54) + Layout.bobbinSize * 0.10;
+      // Bobbin lands on top of the tray (negative Y = above in screen space).
+      const onTopY = (EditorTune.bobbinOnTrayOffsetY || 0);
       f.bobbin.gfx.x = q(f.bobbinFrom.x, bxMid, sp.x, bobbinU);
-      f.bobbin.gfx.y = q(f.bobbinFrom.y, byMid, sp.y, bobbinU);
+      f.bobbin.gfx.y = q(f.bobbinFrom.y, byMid, sp.y + onTopY, bobbinU);
       const bobbinRot = lerp(0, sp.angle + deg2rad(EditorTune.bobbinRailRotationDeg), phaseEase(u, 0.48, 0.95));
       f.bobbin.gfx.rotation = bobbinRot;
       if (f.bobbin.badgeGroup) f.bobbin.badgeGroup.rotation = -bobbinRot;
@@ -3463,8 +3516,9 @@ function tickInFlight(dt) {
       if (f.carrier.applyFade) f.carrier.applyFade('upright', 'lying', lieU);
       if (u >= 1) {
         Game.inFlightCarriers.splice(i, 1);
-        // Add to rail
-        spawnRailEntry(f.carrier, f.bobbin);
+        // Hand off to the rail at the landing point — NOT t=0, so motion
+        // continues smoothly from where the launch ended.
+        spawnRailEntry(f.carrier, f.bobbin, f.landingT ?? 0);
       }
     }
   }
@@ -3986,8 +4040,9 @@ const EditorTool = {
   is3DRotKey(key) {
     return ['bobbinXRotationDeg','bobbinYRotationDeg','bobbinIdleXRotationDeg','bobbinIdleYRotationDeg',
             'trayYRotationDeg','trayIdleYRotationDeg','trayTiltDeg','trayIdleXRotationDeg',
-            'trayThickness','trayIdleZRotationDeg3D','trayRailZRotationDeg3D',
-            'bobbinBarrelR','bobbinFlangeTopH','bobbinFlangeBottomH'].includes(key);
+            'trayThickness','trayIdleZRotationDeg3D',
+            'bobbinBarrelR','bobbinFlangeTopH','bobbinFlangeBottomH',
+            'bobbinRailBarrelR','bobbinRailFlangeTopH','bobbinRailFlangeBottomH'].includes(key);
   },
 
   apply3DReRender(asset) {
@@ -4408,10 +4463,21 @@ function buildEditorAssetRegistry() {
         pos:   { xKey: 'gridShiftX', yKey: 'gridShiftY' },
         scale: { xKey: 'gridScaleX', yKey: 'gridScaleY', xScale: 0.005, yScale: -0.005 },
         extra: [
-          { key: 'gridBgColor',     label: '배경 색 (인셋)',   type: 'color' },
-          { key: 'gridBgAlpha',     label: '배경 투명도',       step: 0.05, min: 0, max: 1 },
-          { key: 'gridFabricColor', label: '직물 색 (빈 셀)',   type: 'color' },
-          { key: 'gridFabricAlpha', label: '직물 투명도',       step: 0.05, min: 0, max: 1 },
+          // gridBgColor fills the rounded inset BEHIND the pattern — the
+          // thin strip visible between the rail (그릴) and the pattern grid.
+          { key: 'gridBgColor',        label: '인셋 바닥 색 (그릴-패턴 사이)', type: 'color' },
+          { key: 'gridBgAlpha',        label: '인셋 바닥 투명도',              step: 0.05, min: 0, max: 1 },
+          // Per-axis extension toward the rail (× rim).
+          // 0 = pattern bbox only, 1 = all the way to the outer hoop edge.
+          { key: 'gridBgPadX',         label: '인셋 가로 확장',                step: 0.02, min: 0, max: 1 },
+          { key: 'gridBgPadY',         label: '인셋 세로 확장',                step: 0.02, min: 0, max: 1 },
+          // Corner roundness as fraction of the smaller half (0 = sharp,
+          // 0.5 = fully rounded stadium / circle).
+          { key: 'gridBgCornerRadius', label: '모서리 라운드 (0~0.5)',         step: 0.01, min: 0, max: 0.5 },
+          // gridFabricColor + alpha control the optional woven-knot overlay.
+          // Default alpha 0 → no overlay, so the bg color shows cleanly.
+          { key: 'gridFabricColor',    label: '직물 색 (선택)',                type: 'color' },
+          { key: 'gridFabricAlpha',    label: '직물 투명도 (0 = 끔)',          step: 0.05, min: 0, max: 1 },
         ],
       },
     },
@@ -4472,6 +4538,11 @@ function buildEditorAssetRegistry() {
         rot:   { xKey: 'bobbinXRotationDeg',
                  yKey: 'bobbinYRotationDeg',
                  zKey: 'bobbinRailRotationDeg' },
+        extra: [
+          { key: 'bobbinRailBarrelR',       label: '중앙 기둥 굵기',  step: 0.05, min: 0.2, max: 3 },
+          { key: 'bobbinRailFlangeTopH',    label: '상단 굵기',        step: 0.05, min: 0.1, max: 5 },
+          { key: 'bobbinRailFlangeBottomH', label: '하단 굵기',        step: 0.05, min: 0.1, max: 5 },
+        ],
       },
     },
     {
@@ -4488,10 +4559,12 @@ function buildEditorAssetRegistry() {
                  yKey: 'trayIdleYRotationDeg',
                  zKey: 'trayDumpRotationDeg' },
         extra: [
-          { key: 'trayDumpVisible',         label: '덤프에 표시 (0/1)', step: 1,    min: 0,    max: 1, int: true },
-          { key: 'trayThickness',           label: '트레이 굵기 (Z)',   step: 0.05, min: 0.1,  max: 4 },
-          { key: 'trayIdleZRotationDeg3D',  label: '3D Z 회전 (°)',     step: 0.5,  min: -180, max: 180 },
-          { key: 'trayStackSpacing',        label: '트레이 간격',        step: 0.05, min: 0,    max: 4 },
+          { key: 'trayDumpVisible',         label: '덤프에 표시 (0/1)',  step: 1,    min: 0,    max: 1, int: true },
+          { key: 'trayThickness',           label: '트레이 굵기 (Z)',    step: 0.05, min: 0.1,  max: 4 },
+          { key: 'trayIdleZRotationDeg3D',  label: '3D Z 회전 (°)',      step: 0.5,  min: -180, max: 180 },
+          { key: 'trayStackSpacing',        label: '트레이 간격',         step: 0.05, min: 0,    max: 4 },
+          { key: 'launchEndT',              label: '발사 도착 t (0~1)',   step: 0.01, min: 0,    max: 0.5 },
+          { key: 'bobbinOnTrayOffsetY',     label: '보빈-트레이 Y offset (px)', step: 1, min: -80, max: 80 },
         ],
       },
     },
@@ -4499,19 +4572,22 @@ function buildEditorAssetRegistry() {
       id: 'trayRail', name: '트레이 (레일)', is3D: true,
       bounds: () => {
         const ref = Game.rail?.[0]?.carrier?.gfx;
-        const size = Math.max(40, Layout.bobbinSize * (EditorTune.trayScale || 1) * 1.4);
+        const size = Math.max(40, Layout.bobbinSize * (EditorTune.trayIdleScale || 1) * 1.4);
         const cx = ref?.x ?? (Layout.hoop.cx - Layout.ringHalfX);
         const cy = ref?.y ?? Layout.hoop.cy;
         return { x: cx - size/2, y: cy - size/2, w: size, h: size };
       },
       bindings: {
-        scale: { uKey: 'trayScale' },
+        // Size + 3D shell tune are unified with 트레이 (대기) so a single
+        // set of knobs drives both states. Only orientation (2D rot below)
+        // stays per-state because the lying rail tray needs its own tilt.
+        scale: { uKey: 'trayIdleScale' },
         rot:   { xKey: 'trayTiltDeg',
                  yKey: 'trayYRotationDeg',
                  zKey: 'trayLaunchedRotationDeg' },
         extra: [
-          { key: 'trayThickness', label: '트레이 굵기 (Z)', step: 0.05, min: 0.1, max: 4 },
-          { key: 'trayRailZRotationDeg3D', label: '3D Z 회전 (°)', step: 0.5, min: -180, max: 180 },
+          { key: 'trayThickness',          label: '트레이 굵기 (Z)', step: 0.05, min: 0.1,  max: 4 },
+          { key: 'trayIdleZRotationDeg3D', label: '3D Z 회전 (°)',   step: 0.5,  min: -180, max: 180 },
         ],
       },
     },
@@ -5244,11 +5320,14 @@ function applyEditorChange(key) {
     case 'trayTiltDeg':
     case 'trayThickness':
     case 'trayIdleZRotationDeg3D':
-    case 'trayRailZRotationDeg3D':
       reRenderTrayY(EditorTune.trayYRotationDeg, EditorTune.trayTiltDeg, EditorTune.trayIdleYRotationDeg);
       break;
     case 'gridBgColor':
     case 'gridBgAlpha':
+    case 'gridBgPad':
+    case 'gridBgPadX':
+    case 'gridBgPadY':
+    case 'gridBgCornerRadius':
       drawGridBg();
       break;
     case 'gridFabricColor':
@@ -5263,8 +5342,12 @@ function applyEditorChange(key) {
     case 'bobbinBarrelR':
     case 'bobbinFlangeTopH':
     case 'bobbinFlangeBottomH':
+    case 'bobbinRailBarrelR':
+    case 'bobbinRailFlangeTopH':
+    case 'bobbinRailFlangeBottomH':
       // Procedural shell changes need re-render of the 3D bobbin texture
-      // (and downstream sprites).
+      // (and downstream sprites). Idle keys re-render upright stages, rail
+      // keys re-render lying stages — reRenderBobbinsY does both.
       reRenderBobbinsY(EditorTune.bobbinYRotationDeg, EditorTune.bobbinIdleYRotationDeg);
       break;
     case 'bobbinIdleYRotationDeg':
