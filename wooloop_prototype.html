@@ -1971,6 +1971,15 @@ async function preRender3DAssets() {
   // Per-orientation shadow update. Called before each bobbin stage render
   // so the same `shadowLight` casts a different-looking shadow for idle
   // vs rail (matches each state's editor knobs).
+  //
+  // NOTE: visible shadow position is controlled by LIGHT position, NOT by
+  // ground plane position. The ground plane is just a receiver — it shows
+  // the shadow wherever the light projects the occluder onto it. Moving
+  // the ground around doesn't move the visible shadow (shadow stays at the
+  // occluder's foot in world space). The user's "offset" knob is therefore
+  // applied to the light: the sun moves east, the shadow falls west, so we
+  // negate the offset on the light to get the intuitive "+X = shadow right"
+  // behaviour.
   const configureShadow = (orientation) => {
     const isRail = orientation === 'lying';
     const angleDeg = isRail
@@ -1979,34 +1988,44 @@ async function preRender3DAssets() {
     const sizeMul = isRail
       ? (EditorTune.bobbinShadowRailSize ?? 1)
       : (EditorTune.bobbinShadowIdleSize ?? 1);
+    const ox = isRail
+      ? (EditorTune.bobbinShadowRailOffsetX ?? 0)
+      : (EditorTune.bobbinShadowIdleOffsetX ?? 0);
+    const oz = isRail
+      ? (EditorTune.bobbinShadowRailOffsetY ?? 0)
+      : (EditorTune.bobbinShadowIdleOffsetY ?? 0);
     // Larger sizeMul → light closer to ground → bigger softer shadow.
     const lightY = 6.0 / Math.max(0.3, sizeMul);
     const radius = 0.5 * sizeMul;
     const a = deg2rad(angleDeg);
-    shadowLight.position.set(Math.sin(a) * radius, lightY, Math.cos(a) * radius);
+    // Subtract the offset on each axis so positive offset visually drifts
+    // the shadow in that direction (light moves opposite → shadow follows).
+    shadowLight.position.set(
+      Math.sin(a) * radius - ox,
+      lightY,
+      Math.cos(a) * radius - oz,
+    );
     shadowLight.shadow.radius = 3 * sizeMul;
+    // Widen the shadow camera frustum proportional to the offset so the
+    // shadow doesn't clip when the user drives offsetX/Y to the edges. The
+    // base frustum was ±1.8 — extend by |ox|+|oz| plus a little safety pad.
+    const frustumPad = 1.8 + Math.max(Math.abs(ox), Math.abs(oz));
+    shadowLight.shadow.camera.left   = -frustumPad;
+    shadowLight.shadow.camera.right  =  frustumPad;
+    shadowLight.shadow.camera.top    =  frustumPad;
+    shadowLight.shadow.camera.bottom = -frustumPad;
+    shadowLight.shadow.camera.updateProjectionMatrix();
   };
   const configureShadowGround = (groundMesh, orientation) => {
     const isRail = (orientation === 'lying');
     const op = isRail
       ? (EditorTune.bobbinShadowRailOpacity ?? 0.38)
       : (EditorTune.bobbinShadowIdleOpacity ?? 0.38);
-    const ox = isRail
-      ? (EditorTune.bobbinShadowRailOffsetX ?? 0)
-      : (EditorTune.bobbinShadowIdleOffsetX ?? 0);
-    const oy = isRail
-      ? (EditorTune.bobbinShadowRailOffsetY ?? 0)
-      : (EditorTune.bobbinShadowIdleOffsetY ?? 0);
     groundMesh.material.opacity = Math.max(0, Math.min(1, op));
     groundMesh.visible = op > 0.001;
-    // Shift the cast surface in world XZ. After the -π/2 X rotation that
-    // lays the plane flat, world X = horizontal in the captured texture
-    // and world Z = vertical (≈ screen Y for both upright + lying cameras
-    // which look roughly head-on at the bobbin). makeShadowGround sets the
-    // Y to -0.78; offsets are added on top, leaving the floor distance
-    // untouched so the shadow stays attached to the bobbin's footprint.
-    groundMesh.position.x = ox;
-    groundMesh.position.z = oy;
+    // Ground stays anchored at world (0, -0.78, 0). It only acts as a
+    // receiver — see configureShadow above for why offsetX/Y live on the
+    // light position instead.
   };
 
   const makeMaterial = (kind = 'bobbin') => {
@@ -2182,8 +2201,11 @@ async function preRender3DAssets() {
   // the bobbin group — otherwise the lying outer rotation flips the plane
   // upside-down and the shadow falls on the unseen back face). Opacity
   // tuned to read as a gentle drop shadow, not a hard-edged silhouette.
+  // Plane size is generous (8×8) so the cast shadow has room to drift
+  // when the user pushes bobbinShadow*OffsetX/Y to the edges of their
+  // ±2 range without falling off the receiver.
   const makeShadowGround = () => {
-    const geo = new THREE.PlaneGeometry(4.5, 4.5);
+    const geo = new THREE.PlaneGeometry(8, 8);
     const mat = new THREE.ShadowMaterial({ opacity: 0.38 });
     const m = new THREE.Mesh(geo, mat);
     m.rotation.x = -Math.PI / 2;   // lying flat on XZ
