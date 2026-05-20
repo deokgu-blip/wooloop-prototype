@@ -311,6 +311,9 @@
 <script src="https://cdn.jsdelivr.net/npm/three@0.137.5/examples/js/loaders/GLTFLoader.js"></script>
 <!-- DRACOLoader: required for Draco-compressed GLBs (e.g. model_optimized.glb). -->
 <script src="https://cdn.jsdelivr.net/npm/three@0.137.5/examples/js/loaders/DRACOLoader.js"></script>
+<!-- Chunky cartoon font for bobbin counts + "5/5" counter (matches reference). -->
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Luckiest+Guy&display=swap">
 </head>
 <body>
 <div id="overlay"><div class="banner" id="banner"></div></div>
@@ -598,6 +601,14 @@ const EDITOR_DEFAULTS = {
   brushOffsetX: -0.78,
   brushOffsetY: 0.75,
   brushScale:   1.0,
+  // Slot bobbin offset (px) from each slot's center — controls where the
+  // bobbin sits on top of its slot square (not the square itself).
+  slotBobbinOffsetX: 0,
+  slotBobbinOffsetY: 0,
+  // Separate horizontal/vertical gaps for the queue grid. Initialized from
+  // the legacy queueGap if not present (see EditorTune init below).
+  queueGapX: 0.72,
+  queueGapY: 0.72,
   // Render layer order, bottom → top. Editable from the inspector so the user
   // can reshuffle which objects sit on top of which.
   layerOrder: ['bg', 'hoop', 'wool', 'thread', 'carrier', 'slotBg', 'bobbin', 'fx', 'ui'],
@@ -625,6 +636,7 @@ const ASSET_LAYER_OF = {
   trayIdle:   'ui',
   trayRail:   'carrier',
   slot:       'slotBg',
+  slotBobbin: 'bobbin',
   queue:      'bobbin',
   counter:    'ui',
 };
@@ -636,10 +648,20 @@ let EditorTune = (() => {
     t.layerOrder = EDITOR_DEFAULTS.layerOrder.slice();
     return t;
   };
+  // Migration: backfill the legacy queueGap into queueGapX/Y when the saved
+  // payload only has queueGap. Must run on the SOURCE data before defaults
+  // are merged in, otherwise the default 0.72 wins over the legacy value.
+  const migrateSource = (src) => {
+    if (src && typeof src.queueGap === 'number') {
+      if (typeof src.queueGapX !== 'number') src.queueGapX = src.queueGap;
+      if (typeof src.queueGapY !== 'number') src.queueGapY = src.queueGap;
+    }
+    return src;
+  };
   try {
     const saved = localStorage.getItem('wooloop_editor_tune');
     if (saved) {
-      const parsed = JSON.parse(saved);
+      const parsed = migrateSource(JSON.parse(saved));
       if (parsed && typeof parsed === 'object') {
         // Merge saved values OVER defaults instead of dropping them on a version
         // mismatch. New keys added in this build get their defaults; existing
@@ -679,6 +701,12 @@ async function loadEditorTuneFromFile() {
     if (!res.ok) return false;
     const parsed = await res.json();
     if (!parsed || typeof parsed !== 'object') return false;
+    // Backfill the legacy queueGap into queueGapX/Y BEFORE Object.assign so
+    // the legacy value wins over the defaults already in EditorTune.
+    if (typeof parsed.queueGap === 'number') {
+      if (typeof parsed.queueGapX !== 'number') parsed.queueGapX = parsed.queueGap;
+      if (typeof parsed.queueGapY !== 'number') parsed.queueGapY = parsed.queueGap;
+    }
     Object.assign(EditorTune, parsed);
     if (Array.isArray(parsed.layerOrder) && parsed.layerOrder.length) {
       EditorTune.layerOrder = parsed.layerOrder.slice();
@@ -869,7 +897,7 @@ const Layout = {
   dump: { x: 0, y: 0 },
   counter: { x: 0, y: 0 },
   slot: { y: 0, size: 0, spacing: 0, startX: 0 },
-  queue: { y: 0, size: 0, spacing: 0, startX: 0, rows: 2, cols: 3 },
+  queue: { y: 0, size: 0, spacingX: 0, spacingY: 0, startX: 0, rows: 2, cols: 3 },
   bobbinSize: 0,
 
   compute(W, H) {
@@ -880,7 +908,14 @@ const Layout = {
     // Slot / queue intrinsic sizes (depend only on W).
     const slotSizePre = Math.min((W - 40) / 5 - 12, EditorTune.slotSize);
     const queueSizePre = slotSizePre * 0.85 * EditorTune.queueBobbinScale;
-    const queueSpacingPre = queueSizePre * (1 + EditorTune.queueGap);
+    // Split X/Y gaps (with legacy queueGap fallback so existing saved values
+    // still work even before the migration runs).
+    const gapX = (typeof EditorTune.queueGapX === 'number') ? EditorTune.queueGapX
+              : (typeof EditorTune.queueGap === 'number') ? EditorTune.queueGap : 0.72;
+    const gapY = (typeof EditorTune.queueGapY === 'number') ? EditorTune.queueGapY
+              : (typeof EditorTune.queueGap === 'number') ? EditorTune.queueGap : 0.72;
+    const queueSpacingX = queueSizePre * (1 + gapX);
+    const queueSpacingY = queueSizePre * (1 + gapY);
     const queueRowsPre = Math.max(1, Math.ceil(QUEUE_VISIBLE_MAX / EditorTune.queueCols));
 
     // Hoop size is independent of slot/queue offsets — moving the slot row
@@ -965,19 +1000,16 @@ const Layout = {
     this.slot.startX = (W - slotSpacing * 5 + (slotSpacing - slotSize)) / 2 + slotSize / 2 + (EditorTune.slotXOffset || 0);
 
     // Queue — anchored UNDER THE HOOP independently of slot.y. The 400px
-    // baseline preserves the original visual default. Final Y is clamped to
-    // keep the bottom row inside the viewport so the user can always reach the
-    // queue to edit it; queueYOffset still nudges within that visible band.
+    // baseline preserves the original visual default. queueYOffset is now
+    // applied verbatim (no clamp) so the user has full control in the
+    // editor — overshoots are visible and recoverable by dragging back.
     this.queue.cols = EditorTune.queueCols;
     this.queue.size = queueSizePre;
-    this.queue.spacing = queueSpacingPre;
+    this.queue.spacingX = queueSpacingX;
+    this.queue.spacingY = queueSpacingY;
     const QUEUE_BASE_FROM_HOOP = 400;
-    const queueExtent = (queueRowsPre - 1) * queueSpacingPre + queueSizePre / 2;
-    const queueDesired = hoopBottom + QUEUE_BASE_FROM_HOOP + effectiveQueueYOffset;
-    const queueMaxY = H - 24 - queueExtent;
-    const queueMinY = hoopBottom + queueSizePre / 2 + 8;
-    this.queue.y = Math.max(queueMinY, Math.min(queueDesired, queueMaxY));
-    this.queue.startX = W / 2 - this.queue.spacing * (this.queue.cols - 1) / 2 + (EditorTune.queueXOffset || 0);
+    this.queue.y = hoopBottom + QUEUE_BASE_FROM_HOOP + effectiveQueueYOffset;
+    this.queue.startX = W / 2 - this.queue.spacingX * (this.queue.cols - 1) / 2 + (EditorTune.queueXOffset || 0);
   },
 
   cellCenter(row, col) {
@@ -996,6 +1028,16 @@ const Layout = {
     };
   },
 
+  // Position where a bobbin sits on top of slot i. The slot square stays at
+  // slotPos(); only the bobbin gets the EditorTune offset.
+  slotBobbinPos(i) {
+    const p = this.slotPos(i);
+    return {
+      x: p.x + (EditorTune.slotBobbinOffsetX || 0),
+      y: p.y + (EditorTune.slotBobbinOffsetY || 0),
+    };
+  },
+
   queuePos(i, row) {
     // Two signatures supported:
     //   queuePos(i)           — legacy, derives col & row from flat index
@@ -1009,8 +1051,8 @@ const Layout = {
       r = row;
     }
     return {
-      x: this.queue.startX + c * this.queue.spacing,
-      y: this.queue.y + r * this.queue.spacing,
+      x: this.queue.startX + c * this.queue.spacingX,
+      y: this.queue.y + r * this.queue.spacingY,
     };
   },
 };
@@ -1326,7 +1368,7 @@ class Bobbin {
     // Sits directly on the bobbin's top face (centered) per reference.
     this.badgeGroup = new PIXI.Container();
     this.label = new PIXI.Text(String(count), {
-      fontFamily: '"Arial Black", "Helvetica Neue", "Apple SD Gothic Neo", "Noto Sans CJK KR", sans-serif',
+      fontFamily: '"Luckiest Guy", "Arial Black", "Helvetica Neue", sans-serif',
       fontSize: Math.round(Layout.bobbinSize * 0.55),
       fontWeight: '900',
       fill: 0xffffff,
@@ -2030,6 +2072,18 @@ async function boot() {
   // isn't there.
   await loadEditorTuneFromFile();
 
+  // Wait for the Luckiest Guy webfont so the very first PIXI.Text glyph
+  // caches use it (PIXI snapshots glyph metrics at construction time).
+  // 1.2s cap so a slow CDN can never block the whole boot.
+  if (document.fonts?.load) {
+    try {
+      await Promise.race([
+        document.fonts.load('900 32px "Luckiest Guy"'),
+        new Promise(r => setTimeout(r, 1200)),
+      ]);
+    } catch (_) { /* fall through to fallback fonts */ }
+  }
+
   const app = new PIXI.Application({
     resizeTo: window,
     backgroundAlpha: 0,
@@ -2207,7 +2261,7 @@ function redrawAll() {
   for (let i = 0; i < Game.slots.length; i++) {
     const s = Game.slots[i];
     if (s && s.bobbin?.gfx) {
-      const p = Layout.slotPos(i);
+      const p = Layout.slotBobbinPos(i);
       s.bobbin.gfx.x = p.x;
       s.bobbin.gfx.y = p.y;
     }
@@ -2465,11 +2519,13 @@ function buildCounter() {
   Game.counterContainer.y = Layout.counter.y;
 
   const t = new PIXI.Text(`${Game.dumpCount}/${GameTune.carrier.total}`, {
-    fontFamily: 'sans-serif',
+    fontFamily: '"Luckiest Guy", "Arial Black", "Helvetica Neue", sans-serif',
     fontSize: EditorTune.counterFontSize,
     fontWeight: '800',
     fill: 0xffffff,
-    stroke: 0x000000, strokeThickness: 3,
+    stroke: 0x000000,
+    strokeThickness: Math.max(3, Math.round(EditorTune.counterFontSize * 0.16)),
+    lineJoin: 'round',
   });
   t.anchor.set(0, 0.5);
   t.x = -15;
@@ -3016,7 +3072,7 @@ function finishLap(entry) {
     return;
   }
   // Move bobbin to slot — switch back to upright orientation
-  const slotPos = Layout.slotPos(freeSlot);
+  const slotPos = Layout.slotBobbinPos(freeSlot);
   const bb = entry.bobbin;
   const sx = bb.gfx.x, sy = bb.gfx.y;
   const sr = bb.gfx.rotation;
@@ -4305,17 +4361,30 @@ function buildEditorAssetRegistry() {
         return {
           x: q.startX - q.size/2,
           y: q.y - q.size/2,
-          w: (cols - 1) * q.spacing + q.size,
-          h: (rows - 1) * q.spacing + q.size,
+          w: (cols - 1) * q.spacingX + q.size,
+          h: (rows - 1) * q.spacingY + q.size,
         };
       },
       bindings: {
         pos:   { xKey: 'queueXOffset', yKey: 'queueYOffset' },
         scale: { uKey: 'queueBobbinScale' },
         extra: [
-          { key: 'queueCols', label: '큐 열 수',     step: 1,    min: 2, max: 6, int: true },
-          { key: 'queueGap',  label: '큐 가로 간격', step: 0.05, min: 0, max: 2 },
+          { key: 'queueCols',  label: '큐 열 수',     step: 1,    min: 2, max: 6, int: true },
+          { key: 'queueGapX',  label: '가로 간격',    step: 0.05, min: 0, max: 3 },
+          { key: 'queueGapY',  label: '세로 간격',    step: 0.05, min: 0, max: 3 },
         ],
+      },
+    },
+    {
+      id: 'slotBobbin', name: '슬롯 보빈 위치', is3D: false,
+      bounds: () => {
+        // Tight box around the first slot bobbin's expected center.
+        const p = Layout.slotBobbinPos(0);
+        const s = Math.max(40, Layout.bobbinSize * (EditorTune.bobbinIdleScale || 1) * 1.0);
+        return { x: p.x - s/2, y: p.y - s/2, w: s, h: s };
+      },
+      bindings: {
+        pos: { xKey: 'slotBobbinOffsetX', yKey: 'slotBobbinOffsetY' },
       },
     },
     {
@@ -5018,8 +5087,13 @@ function applyEditorChange(key) {
     case 'gridShiftY':
     case 'queueCols':
     case 'queueGap':
+    case 'queueGapX':
+    case 'queueGapY':
     case 'queueBobbinScale':
     case 'queueXOffset':
+    case 'queueYOffset':
+    case 'slotBobbinOffsetX':
+    case 'slotBobbinOffsetY':
     case 'slotSize':
     case 'slotXOffset':
     case 'slotYOffset':
@@ -5049,7 +5123,7 @@ function applyEditorChange(key) {
         for (let i = 0; i < preserved.length; i++) {
           Game.slots[i] = preserved[i];
           if (preserved[i]?.bobbin) {
-            const p = Layout.slotPos(i);
+            const p = Layout.slotBobbinPos(i);
             preserved[i].bobbin.gfx.x = p.x;
             preserved[i].bobbin.gfx.y = p.y;
           }
@@ -5059,6 +5133,16 @@ function applyEditorChange(key) {
           const g = Game.slotGfxs[i];
           const p = Layout.slotPos(i);
           g.x = p.x; g.y = p.y;
+        }
+      }
+      // Reposition bobbins currently sitting on slots so slotBobbinOffsetX/Y,
+      // slotXOffset, and slotYOffset all take effect live.
+      for (let i = 0; i < Game.slots.length; i++) {
+        const s = Game.slots[i];
+        if (s?.bobbin?.gfx) {
+          const p = Layout.slotBobbinPos(i);
+          s.bobbin.gfx.x = p.x;
+          s.bobbin.gfx.y = p.y;
         }
       }
       // Re-layout queue bobbins
