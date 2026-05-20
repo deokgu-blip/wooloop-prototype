@@ -1459,29 +1459,11 @@ class Bobbin {
 
   static _nextId = 1;
 
-  _drawShadow(isWaiting) {
-    // Soft elliptical drop shadow under the bobbin (matches reference).
-    // Two stacked ellipses give a gentle falloff without filters.
-    const s = this.shadow;
-    s.clear();
-    const size = Layout.bobbinSize;
-    // Unified: bobbinIdleScale controls both upright (queue/slot) AND lying
-    // (rail) bobbins so a single knob in the editor scales everything. The
-    // legacy bobbinSpriteScale survives only as a fallback for older saves.
-    const scale = EditorTune.bobbinIdleScale ?? EditorTune.bobbinSpriteScale;
-    // Place at the base of the rendered sprite. The upright camera puts the
-    // bobbin's foot ~38% below the sprite center; the lying camera ~32%.
-    const baseY = isWaiting ? size * scale * 0.46 : size * scale * 0.40;
-    const rx = isWaiting ? size * scale * 0.42 : size * scale * 0.45;
-    const ry = isWaiting ? size * scale * 0.11 : size * scale * 0.12;
-    // Outer soft halo
-    s.beginFill(0x000000, 0.18);
-    s.drawEllipse(0, baseY, rx * 1.18, ry * 1.35);
-    s.endFill();
-    // Inner core shadow
-    s.beginFill(0x000000, 0.32);
-    s.drawEllipse(0, baseY, rx, ry);
-    s.endFill();
+  _drawShadow(_isWaiting) {
+    // Real shadow is now baked into the Three.js pre-render (ShadowMaterial
+    // ground plane in buildBobbinGroup), so the PIXI Graphics ellipse is
+    // intentionally a no-op. Kept as a stub so any callers stay valid.
+    if (this.shadow) this.shadow.clear();
   }
 
   _updateLabelStyle() {
@@ -1891,6 +1873,12 @@ async function preRender3DAssets() {
   renderer.setPixelRatio(2);
   renderer.outputEncoding = THREE.sRGBEncoding;
   renderer.setClearColor(0x000000, 0);
+  // Enable shadow mapping so the bobbin can cast a real shadow on its
+  // ground plane (baked into the pre-render texture). PCF (non-soft)
+  // keeps the shadow contour crisp — soft variants washed out at the
+  // small sprite sizes the texture renders at.
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFShadowMap;
 
   // Two cameras:
   //   camLying — high oblique view for bobbins/trays lying on rail
@@ -1908,6 +1896,18 @@ async function preRender3DAssets() {
   scene.add(ambient);
   const dir1 = new THREE.DirectionalLight(0xffffff, 1.05);
   dir1.position.set(-2.5, 4.0, 3.0);
+  // Main key light → casts the bobbin's real shadow. Tight orthographic
+  // bounds (just enough to enclose the bobbin) so the shadow map is
+  // high-resolution for the bobbin area, giving a crisp ground shadow.
+  dir1.castShadow = true;
+  dir1.shadow.camera.near = 0.5;
+  dir1.shadow.camera.far  = 10;
+  dir1.shadow.camera.left   = -1.5;
+  dir1.shadow.camera.right  =  1.5;
+  dir1.shadow.camera.top    =  1.5;
+  dir1.shadow.camera.bottom = -1.5;
+  dir1.shadow.mapSize.set(2048, 2048);
+  dir1.shadow.bias = -0.0003;
   scene.add(dir1);
   const dir2 = new THREE.DirectionalLight(0x9fd3ff, 0.32);
   dir2.position.set(2, 1.2, -2);
@@ -1941,7 +1941,10 @@ async function preRender3DAssets() {
         } else {
           c.material = makeMaterial(kind);
         }
-        c.castShadow = false;
+        // Bobbins cast a real shadow onto the ground plane added below;
+        // trays don't need to (they already have a ground-shadow plane of
+        // their own in the carrier scene).
+        c.castShadow = (kind === 'bobbin');
         c.receiveShadow = false;
       }
     });
@@ -2074,6 +2077,20 @@ async function preRender3DAssets() {
     bobbin.scale.set(0.34, 0.34, 0.34);
     group.add(bobbin);
     addReferenceBobbinShell(group, rings, orientation);
+    // Procedural shell meshes were just added; flag them as shadow casters.
+    group.traverse(c => { if (c.isMesh) c.castShadow = true; });
+
+    // Ground plane that receives the cast shadow. ShadowMaterial keeps the
+    // plane fully transparent except where shadow falls — so the captured
+    // texture has a soft dark blob silhouetting the bobbin, perfectly
+    // positioned by Three.js' shadow camera.
+    const groundGeo = new THREE.PlaneGeometry(4.5, 4.5);
+    const groundMat = new THREE.ShadowMaterial({ opacity: 0.65 });
+    const ground = new THREE.Mesh(groundGeo, groundMat);
+    ground.rotation.x = -Math.PI / 2;       // lying flat (XZ plane)
+    ground.position.y = -0.78;              // just below the bottom flange
+    ground.receiveShadow = true;
+    group.add(ground);
     return group;
   };
 
