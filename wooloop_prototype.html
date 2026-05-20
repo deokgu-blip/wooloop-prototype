@@ -644,6 +644,12 @@ const EDITOR_DEFAULTS = {
   bobbinBarrelR:        1.0,
   bobbinFlangeTopH:     1.0,
   bobbinFlangeBottomH:  1.0,
+  // Rail tray flat toggle. When true (default), the in-flight + on-rail
+  // tray is always rendered fully horizontal regardless of trayTiltDeg
+  // / trayLaunchedRotationDeg — eliminates the awkward "vertical-then-
+  // suddenly-horizontal" look the user reported. Disable to get back
+  // the user-tuned partial tilt.
+  trayRailFlat: 1,
   // Bobbin shadow (cast onto the ground plane in the 3D pre-render).
   // Separate knobs for idle (queue/slot) vs rail (lying) so the user can
   // tune each independently or disable one entirely (opacity 0).
@@ -2212,7 +2218,12 @@ async function preRender3DAssets() {
       trayGroup.rotation.x = deg2rad(EditorTune.trayIdleXRotationDeg || 0);
       trayGroup.rotation.z = deg2rad(EditorTune.trayIdleZRotationDeg3D || 0);
     } else {
-      const tilt = (tiltDeg !== undefined ? tiltDeg : EditorTune.trayTiltDeg);
+      // Force fully-flat (90° X) tilt when trayRailFlat is on — keeps the
+      // rail tray horizontal from the first frame of the launch slide.
+      const flatOverride = (EditorTune.trayRailFlat ?? 1) >= 0.5;
+      const tilt = flatOverride
+        ? 90
+        : (tiltDeg !== undefined ? tiltDeg : EditorTune.trayTiltDeg);
       trayGroup.rotation.x = -deg2rad(tilt);
       trayGroup.rotation.y = deg2rad(yDeg);
       // Rail-state tray shares the idle tray's 3D-Z rotation key.
@@ -3149,7 +3160,11 @@ function tickRail(dt) {
     const pos = RailPath.position(e.t);
     e.carrier.gfx.x = pos.x;
     e.carrier.gfx.y = pos.y;
-    e.carrier.gfx.rotation = pos.angle + deg2rad(EditorTune.trayLaunchedRotationDeg);
+    // trayRailFlat forces the carrier to align with the rail direction
+    // ONLY (no extra trayLaunchedRotationDeg). Keeps the tray flat to
+    // the rail at all times.
+    const flatRail = (EditorTune.trayRailFlat ?? 1) >= 0.5;
+    e.carrier.gfx.rotation = pos.angle + (flatRail ? 0 : deg2rad(EditorTune.trayLaunchedRotationDeg));
     e.bobbin.gfx.x = pos.x;
     e.bobbin.gfx.y = pos.y + (EditorTune.bobbinOnTrayOffsetY || 0);
     // Bobbin follows the carrier direction (+ optional tuneable offset)
@@ -4749,8 +4764,13 @@ function buildEditorAssetRegistry() {
                  yKey: 'trayYRotationDeg',
                  zKey: 'trayLaunchedRotationDeg' },
         extra: [
-          { key: 'trayThickness',          label: '트레이 굵기 (Z)', step: 0.05, min: 0.1,  max: 4 },
-          { key: 'trayIdleZRotationDeg3D', label: '3D Z 회전 (°)',   step: 0.5,  min: -180, max: 180 },
+          { key: 'trayThickness',          label: '트레이 굵기 (Z)',           step: 0.05, min: 0.1,  max: 4 },
+          { key: 'trayIdleZRotationDeg3D', label: '3D Z 회전 (°)',             step: 0.5,  min: -180, max: 180 },
+          // When 1, rail tray is forced fully horizontal regardless of the
+          // upright X-tilt above — eliminates the "vertical-then-suddenly-
+          // horizontal" look when trayTiltDeg is partly upright. Turn off
+          // to recover the raw X-tilt look on the rail.
+          { key: 'trayRailFlat',           label: '레일 평평 (가로형)',         step: 1,    min: 0,    max: 1, int: true },
         ],
       },
     },
@@ -5483,6 +5503,10 @@ function applyEditorChange(key) {
     case 'trayTiltDeg':
     case 'trayThickness':
     case 'trayIdleZRotationDeg3D':
+    case 'trayRailFlat':
+      // trayRailFlat also requires a re-render: the lying-tray sprite bakes
+      // in the X tilt, so flipping the override has to redraw the texture
+      // (not just change a live-read value).
       reRenderTrayY(EditorTune.trayYRotationDeg, EditorTune.trayTiltDeg, EditorTune.trayIdleYRotationDeg);
       break;
     case 'gridBgColor':
