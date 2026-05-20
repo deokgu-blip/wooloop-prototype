@@ -4432,32 +4432,46 @@ const EditorTool = {
 
     ins.innerHTML = sections.join('');
 
-    // Hook number + color inputs
+    // Hook number + color inputs.
+    //
+    // Both event types apply changes live so the user sees the effect
+    // immediately while typing or sliding a color picker — no blur, Enter,
+    // or refresh required.
+    //   • 'input'  fires on every keystroke (numbers) or every drag pixel
+    //              (color). We commit to EditorTune + applyEditorChange so
+    //              the visual updates in real time.
+    //   • 'change' fires on blur / Enter / spin button. We still listen so
+    //              clamping (e.g. min/max) re-renders the input field, and
+    //              so the final committed value matches what the user sees.
+    // Skipping the 'input' path for numbers (the old behaviour) made many
+    // knobs feel like they only applied "on refresh", which is the bug
+    // we're fixing here.
+    const parseInputValue = (inp) => {
+      if (inp.type === 'color') {
+        return parseInt(inp.value.replace('#', ''), 16);
+      }
+      // Allow partial values like "-" or "0." mid-typing without crashing
+      // — parseFloat returns NaN which we skip below.
+      return parseFloat(inp.value);
+    };
+    const commitInput = (inp, key, source) => {
+      const raw = parseInputValue(inp);
+      if (!Number.isFinite(raw)) return;
+      EditorTune[key] = this.clampScale(key, raw);
+      applyEditorChange(key);
+      if (this.is3DRotKey(key)) this.apply3DReRender(this.getAsset(this.selectedId));
+      // On 'change' the field may have been clamped, but the visible input
+      // still shows the raw user-typed value. Sync it back so the user sees
+      // the clamped result (and isn't surprised when re-opening the inspector).
+      if (source === 'change' && inp.type !== 'color' && document.activeElement !== inp) {
+        inp.value = this.formatValueRaw(key, EditorTune[key]);
+      }
+    };
     ins.querySelectorAll('input[data-key]').forEach(inp => {
       const key = inp.dataset.key;
       if (!key) return;
-      inp.addEventListener('input', () => {
-        // Color inputs fire 'input' on every drag; numbers also accept input.
-        if (inp.type !== 'color') return;
-        const v = parseInt(inp.value.replace('#', ''), 16);
-        if (!isNaN(v)) {
-          EditorTune[key] = this.clampScale(key, v);
-          applyEditorChange(key);
-        }
-      });
-      inp.addEventListener('change', () => {
-        let v;
-        if (inp.type === 'color') {
-          v = parseInt(inp.value.replace('#', ''), 16);
-        } else {
-          v = parseFloat(inp.value);
-        }
-        if (!isNaN(v)) {
-          EditorTune[key] = this.clampScale(key, v);
-          applyEditorChange(key);
-          if (this.is3DRotKey(key)) this.apply3DReRender(this.getAsset(this.selectedId));
-        }
-      });
+      inp.addEventListener('input',  () => commitInput(inp, key, 'input'));
+      inp.addEventListener('change', () => commitInput(inp, key, 'change'));
     });
     // Axis buttons
     ins.querySelectorAll('button[data-rot-axis]').forEach(btn => {
@@ -5552,11 +5566,15 @@ function applyEditorChange(key) {
       break;
     case 'bobbinRailRotationDeg':
     case 'trayLaunchedRotationDeg':
-    case 'trayDumpRotationDeg':
     case 'arrowSecPerLap':
     case 'arrowHideStart':
     case 'arrowHideEnd':
-      // Picked up live each frame — nothing to rebuild.
+    case 'launchEndT':
+    case 'bobbinOnTrayOffsetY':
+    case 'trayRailZRotationDeg3D':
+      // Picked up live each frame (or on next launch for launchEndT) —
+      // nothing to rebuild. Listed explicitly so future audits can tell
+      // a deliberate "live read" from a missing case.
       break;
     case 'railOffsetX':
     case 'railOffsetY':
@@ -5668,6 +5686,25 @@ function applyEditorChange(key) {
       }
       break;
     // bobbinRailRotationDeg + trayLaunchedRotationDeg + arrowSecPerLap = picked up live
+    default:
+      // Catch-all so a brand-new editor knob never silently no-ops while
+      // waiting on its own case. Best effort: refresh visual styles on
+      // bobbins / carriers and recompute layout. Cheap enough to run on
+      // any input event; not a substitute for a real case but keeps the
+      // "applies after refresh only" footgun from regressing.
+      try {
+        for (const s of Game.slots || []) s?.bobbin?.updateVisualStyle?.();
+        for (const e of Game.queue || []) e?.bobbin?.updateVisualStyle?.();
+        for (const e of Game.rail || []) {
+          e?.bobbin?.updateVisualStyle?.();
+          e?.carrier?.updateVisualStyle?.();
+        }
+        for (const f of Game.inFlightCarriers || []) {
+          f?.bobbin?.updateVisualStyle?.();
+          f?.carrier?.updateVisualStyle?.();
+        }
+      } catch (e) { /* tolerate any stage that hasn't booted yet */ }
+      break;
   }
 }
 
