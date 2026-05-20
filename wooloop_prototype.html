@@ -1713,12 +1713,13 @@ function drawReferenceTrayStack(container, count) {
   const stack = new PIXI.Container();
   stack.rotation = deg2rad(EditorTune.trayDumpRotationDeg || 0);
 
-  // Soft ground shadow under the whole stack.
-  const shadow = new PIXI.Graphics();
-  shadow.beginFill(0x000000, 0.26);
-  shadow.drawEllipse(0, s * 0.55, s * 0.62, s * 0.18);
-  shadow.endFill();
-  stack.addChild(shadow);
+  // (Removed) A "soft ground shadow under the whole stack" ellipse used
+  // to live here. It was authored for an UPRIGHT stack — so when the user
+  // tilts the dump via trayDumpRotationDeg (e.g. -82° to lie the stack
+  // flat), the shadow rotates with the stack and pops out to the side as
+  // an out-of-place dark oval. Each individual tray sprite already has
+  // its own baked shadow via the Three.js render, so the stack-wide oval
+  // is redundant on top of that. Dropping it removes the artifact.
 
   // Card-stack: backmost (highest i) rendered first so the foreground (i=0)
   // sits on top z-order. The slot at i=0 is anchored at the dump center
