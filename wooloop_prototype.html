@@ -5699,10 +5699,13 @@ const MapTool = {
       const data = ctx.getImageData(0, 0, cols, rows).data;
 
       // --- Dynamic palette extraction (user request: no fixed-color limit).
-      // Pull the top ~50 dominant colors from THIS image and use them as
-      // the new WOOL palette. Cells quantize to nearest in the dynamic
-      // palette; bobbins later spawn with these same colors.
-      const PALETTE_SIZE = 50;
+      // Top ~30 dominant colors from the image (with similar-color merge
+      // applied inside extractPaletteFromImagePixels). Cells quantize to
+      // nearest in the dynamic palette; bobbins later spawn with these
+      // same colors. The merge pass means clean pixel art with ~10 real
+      // colors comes out with ~10 palette entries instead of 50 split
+      // across anti-aliasing fringes.
+      const PALETTE_SIZE = 30;
       const dynPalette = extractPaletteFromImagePixels(data, PALETTE_SIZE);
       const paletteCount = Object.keys(dynPalette).length;
       if (paletteCount > 0) {
@@ -5937,16 +5940,25 @@ function quantizeToWool(r, g, b) {
 }
 
 // Extract a dynamic palette (~N dominant colors) from RGBA pixel data.
-// Strategy: bucket pixels into a coarse RGB grid (16 levels per channel
-// → max 4096 buckets), count frequencies, take the top N, and use the
-// average RGB inside each top bucket as the representative color.
-// Returns { key: rgbFill } where keys are 'c0', 'c1', ... in frequency
-// order. Caller passes this to setActivePalette() to install it.
-function extractPaletteFromImagePixels(pixels, targetCount = 50) {
-  const QUANT = 16;                   // 16 levels per channel = 4096 buckets max
-  const buckets = new Map();          // key → { sumR, sumG, sumB, count }
+// Pipeline:
+//   1. Coarse quantize each pixel into a 32-level-per-channel RGB grid
+//      (max 32³ = 32,768 buckets, but real images use far fewer). The
+//      coarser the grid, the more aggressively near-identical pixels
+//      (e.g. edge anti-aliasing fringes) bin together.
+//   2. Sort buckets by frequency, keep the top `targetCount * 2` as
+//      candidates.
+//   3. Greedy merge pass: walk candidates from most-to-least frequent;
+//      any later candidate whose perceptually-weighted RGB distance to
+//      an already-kept color is below `mergeThreshold` is absorbed into
+//      the kept color (its pixels added to that bucket's sum/count).
+//   4. Truncate to `targetCount`. Output: { 'c0', 'c1', ... } in frequency
+//      order with each value = averaged RGB fill.
+function extractPaletteFromImagePixels(pixels, targetCount = 30) {
+  const QUANT = 32;                   // 32-step grid = ~32³ buckets max
+  const MERGE_DIST_SQ = 40 * 40 * 9;  // weighted (R²·2 + G²·4 + B²·3) limit
+  const buckets = new Map();
   for (let i = 0; i < pixels.length; i += 4) {
-    if (pixels[i + 3] < 64) continue; // skip transparent
+    if (pixels[i + 3] < 64) continue;
     const r = pixels[i], g = pixels[i + 1], b = pixels[i + 2];
     const qr = Math.round(r / QUANT) * QUANT;
     const qg = Math.round(g / QUANT) * QUANT;
@@ -5959,18 +5971,46 @@ function extractPaletteFromImagePixels(pixels, targetCount = 50) {
     }
     bucket.sumR += r; bucket.sumG += g; bucket.sumB += b; bucket.count++;
   }
-  const sorted = [...buckets.values()]
+  // Materialize candidate colors as { r, g, b, count }.
+  const candidates = [...buckets.values()]
     .map(b => ({
       r: Math.round(b.sumR / b.count),
       g: Math.round(b.sumG / b.count),
       b: Math.round(b.sumB / b.count),
       count: b.count,
     }))
-    .sort((a, b) => b.count - a.count)
-    .slice(0, targetCount);
+    .sort((a, b) => b.count - a.count);
+  // Greedy merge by perceptually-weighted distance. Weights match the
+  // quantizeToWool weighting (R×2, G×4, B×3) — green dominates so green-
+  // shifted variants merge before color-shifted ones.
+  const kept = [];
+  for (const cand of candidates) {
+    let absorbed = false;
+    for (const k of kept) {
+      const dr = cand.r - k.r, dg = cand.g - k.g, db = cand.b - k.b;
+      const d2 = 2 * dr * dr + 4 * dg * dg + 3 * db * db;
+      if (d2 < MERGE_DIST_SQ) {
+        // Pixel-weighted average so the kept color stays close to the
+        // dominant pixel population.
+        const total = k.count + cand.count;
+        k.r = Math.round((k.r * k.count + cand.r * cand.count) / total);
+        k.g = Math.round((k.g * k.count + cand.g * cand.count) / total);
+        k.b = Math.round((k.b * k.count + cand.b * cand.count) / total);
+        k.count = total;
+        absorbed = true;
+        break;
+      }
+    }
+    if (!absorbed) {
+      kept.push({ ...cand });
+      if (kept.length >= targetCount) break;
+    }
+  }
+  // Re-sort by count (merges may have shuffled the order).
+  kept.sort((a, b) => b.count - a.count);
   const palette = {};
-  for (let i = 0; i < sorted.length; i++) {
-    const { r, g, b } = sorted[i];
+  for (let i = 0; i < kept.length; i++) {
+    const { r, g, b } = kept[i];
     palette['c' + i] = (Math.min(255, r) << 16) | (Math.min(255, g) << 8) | Math.min(255, b);
   }
   return palette;
