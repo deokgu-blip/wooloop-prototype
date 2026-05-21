@@ -655,6 +655,12 @@ const EDITOR_DEFAULTS = {
   // (and therefore re-bake the texture). Use stack rotation to tilt the
   // pile angle without touching the per-tray pose.
   trayStackRotationDeg: 0,
+  // Extra 2D Z rotation applied to the rail tray ONLY (on top of the
+  // launchedRotation + pos.angle + stack rotation). Lets the user dial
+  // in a fixed offset for the rail tray's facing without touching the
+  // launch-finishing-angle knob (trayLaunchedRotationDeg) or rotating
+  // the whole dump pile.
+  trayRailRotationDeg2D: 0,
   // Bobbin shell tuning — multipliers on the procedural shell parts that
   // ride on top of the GLB model.
   //   bobbinBarrelR        : central column radius (also acts as inner wool
@@ -3435,12 +3441,12 @@ function launchBobbin(bobbin) {
   // ~0.04 puts the landed bobbin clear of the brush sprite.
   const landingT = clamp(EditorTune.launchEndT ?? 0.05, 0, 0.95);
   const startPos = RailPath.position(landingT);
-  // Final rail rotation = rail tangent at landing point + dump baseline.
-  // Matches the new tickRail formula so the slide arrives at the same
-  // angle the rail will hold from that point onward.
+  // Final rail rotation matches tickRail's formula exactly so the slide
+  // hand-off doesn't snap. Includes the new trayRailRotationDeg2D offset.
   const finalTrayRot = startPos.angle + deg2rad(
     (EditorTune.trayStackRotationDeg || 0) +
-    (EditorTune.trayLaunchedRotationDeg || 0)
+    (EditorTune.trayLaunchedRotationDeg || 0) +
+    (EditorTune.trayRailRotationDeg2D || 0)
   );
   const carrier = takeFrontTrayFromDump();
   if (!carrier) return;
@@ -3574,14 +3580,13 @@ function tickRail(dt) {
     const pos = RailPath.position(e.t);
     e.carrier.gfx.x = pos.x;
     e.carrier.gfx.y = pos.y;
-    // Rail tray rotation now follows the rail tangent (pos.angle) so the
-    // tray visually "points along the track" as it travels. The dump
-    // baseline (stackRot + launchedRot) is added on top so the tray's
-    // base orientation matches the dump pile at rail-bottom (pos.angle=0)
-    // and rotates from there.
+    // Rail tray rotation = rail tangent + (stackRot + launchedRot +
+    // railRot2D). railRot2D is an extra per-rail-tray offset the user
+    // can dial in independently from the launch-end angle.
     e.carrier.gfx.rotation = pos.angle + deg2rad(
       (EditorTune.trayStackRotationDeg || 0) +
-      (EditorTune.trayLaunchedRotationDeg || 0)
+      (EditorTune.trayLaunchedRotationDeg || 0) +
+      (EditorTune.trayRailRotationDeg2D || 0)
     );
     e.bobbin.gfx.x = pos.x;
     e.bobbin.gfx.y = pos.y + (EditorTune.bobbinOnTrayOffsetY || 0);
@@ -4050,7 +4055,8 @@ function tickInFlight(dt) {
       // includes the rail tangent angle at the landing point).
       const finalRot = sp.angle + deg2rad(
         (EditorTune.trayStackRotationDeg || 0) +
-        (EditorTune.trayLaunchedRotationDeg || 0)
+        (EditorTune.trayLaunchedRotationDeg || 0) +
+        (EditorTune.trayRailRotationDeg2D || 0)
       );
       f.carrier.gfx.rotation = lerpAngle(f.fromCarrierRot ?? 0, finalRot, posU);
       // Orientation crossfade: upright sprite (dump texture) → lying
@@ -5248,6 +5254,11 @@ function buildEditorAssetRegistry() {
         extra: [
           { key: 'trayThickness',          label: '트레이 굵기 (Z)',           step: 0.05, min: 0.1,  max: 4 },
           { key: 'trayIdleZRotationDeg3D', label: '3D Z 회전 (°)',             step: 0.5,  min: -180, max: 180 },
+          // Pure 2D rotation offset applied to the rail tray on top of
+          // the rail tangent + launchedRot. Independent of Z gizmo
+          // (trayLaunchedRotationDeg) so the user can tune the rail
+          // facing without changing the launch end-angle.
+          { key: 'trayRailRotationDeg2D',  label: '레일 2D 회전 (°)',           step: 0.5,  min: -180, max: 180 },
           // When 1, the lying tray is baked with X tilt = 90° (full flat
           // plate), regardless of the upright trayTiltDeg above. The
           // 회전 Z (trayLaunchedRotationDeg) knob STILL rotates the tray
@@ -6282,6 +6293,7 @@ function applyEditorChange(key) {
       break;
     case 'bobbinRailRotationDeg':
     case 'trayLaunchedRotationDeg':
+    case 'trayRailRotationDeg2D':
     case 'arrowSecPerLap':
     case 'arrowHideStart':
     case 'arrowHideEnd':
