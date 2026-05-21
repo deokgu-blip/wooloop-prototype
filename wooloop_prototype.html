@@ -562,16 +562,16 @@ const EDITOR_DEFAULTS = {
   // Tray (dump position)
   dumpX: -0.84,                  // dump.x = cx + outerHalf * X (negative = left of center)
   dumpY: 0.96,                   // dump.y = cy + outerHalf * X
-  trayDumpRotationDeg: 0,        // Z-axis (2D) rotation when waiting in dump
-  trayIdleScale: 1.0,            // tray stack size while waiting in dump
+  trayDumpRotationDeg: 65,       // Z-axis (2D) rotation when waiting in dump
+  trayIdleScale: 1.9,            // tray stack size while waiting in dump
   trayIdleYRotationDeg: 0,       // 3D Y-axis rotation for waiting tray
   trayIdleXRotationDeg: 0,       // 3D X-axis rotation for waiting tray
   trayScale: 1.82,               // tray size while lying on rail
   trayDumpVisible: 1,            // 0 = hide tray in dump, 1 = show stack
   // Tray (launched / on rail)
-  trayLaunchedRotationDeg: 0,    // Z-axis (2D) rotation when on rail
+  trayLaunchedRotationDeg: 65,   // Z-axis (2D) rotation when on rail
   trayYRotationDeg: 0,           // 3D Y-axis rotation of tray model (re-renders texture)
-  trayTiltDeg: 90,               // 3D X-axis tilt for lying tray (0=standing, 90=lying flat)
+  trayTiltDeg: 60,               // 3D X-axis tilt for lying tray (0=standing, 90=lying flat)
   // Queue / Slot / Counter (extended UI editor knobs)
   queueCols: 3,                  // columns in the queue grid
   queueGap: 0.72,                // queue cell width = bobbinSize * (queueGap + 1)
@@ -633,7 +633,7 @@ const EDITOR_DEFAULTS = {
   trayRailZRotationDeg3D: 0,
   // Vertical gap multiplier between trays in the dump stack. 1.0 = baseline,
   // <1 brings them closer, >1 spreads them apart.
-  trayStackSpacing: 1.0,
+  trayStackSpacing: 0.56,
   // Bobbin shell tuning — multipliers on the procedural shell parts that
   // ride on top of the GLB model.
   //   bobbinBarrelR        : central column radius (also acts as inner wool
@@ -652,31 +652,17 @@ const EDITOR_DEFAULTS = {
   // the user can rotate the tray's facing direction on the rail without
   // resurrecting the "vertical-then-suddenly-horizontal" bug. Disable to
   // get back the user-tuned partial tilt.
-  trayRailFlat: 1,
-  // Bobbin shadow (cast onto the ground plane in the 3D pre-render).
-  // Separate knobs for idle (queue/slot) vs rail (lying) so the user can
-  // tune each independently or disable one entirely (opacity 0).
-  //   opacity : 0..1 — darkness of the shadow (ShadowMaterial.opacity)
-  //   angle   : 0..360 deg — direction the shadow falls (0 = no lateral
-  //             offset, 90 = +X, etc.). Larger angle effect = more smear.
-  //   size    : multiplier — bigger value = larger / softer shadow
-  //   offsetX : world-X shift of the ground plane → horizontal slide of
-  //             the shadow in the captured texture (positive = right).
-  //   offsetY : world-Z shift of the ground plane → vertical slide of
-  //             the shadow in the captured texture (positive = down for
-  //             the upright camera, positive = down-screen for lying too
-  //             because both cameras look roughly head-on).
-  bobbinShadowIdleOpacity: 0.38,
-  bobbinShadowIdleAngle:   30,    // slight forward-right cast
-  bobbinShadowIdleSize:    1.0,
-  bobbinShadowIdleOffsetX: 0,
-  bobbinShadowIdleOffsetY: 0,
-  bobbinShadowRailOpacity: 0,     // off by default — user thought the
-                                  // rail-state shadow looked odd
-  bobbinShadowRailAngle:   30,
-  bobbinShadowRailSize:    1.0,
-  bobbinShadowRailOffsetX: 0,
-  bobbinShadowRailOffsetY: 0,
+  trayRailFlat: 0.05,
+  // Bobbin shadow (drawn as a soft PIXI ground ellipse under every bobbin).
+  // These replace the old idle/rail split shadow keys so the inspector
+  // controls one visible, live-updating shadow system.
+  bobbinShadowIntensity: 0.54,   // 0..1 darkness
+  bobbinShadowAngleDeg:  30,     // direction: 0 = down, 90 = right
+  bobbinShadowDistance:  0.12,   // directional drift as fraction of bobbin size
+  bobbinShadowRangeX:    1.0,    // horizontal ellipse radius multiplier
+  bobbinShadowRangeY:    1.0,    // vertical ellipse radius multiplier
+  bobbinShadowOffsetX:   0,      // additional screen-space px shift
+  bobbinShadowOffsetY:   10,
   // Launch animation tuning. The tray/bobbin pair lands at this fraction
   // along the rail (0 = bottom-left 7 o'clock entry, 0.05 ≈ a bit past the
   // brush). Bumping it up makes the landing point visibly clear of the
@@ -709,6 +695,16 @@ const EDITOR_DEFAULTS = {
 
 // Default render order (bottom → top). Used as fallback and for reset.
 const DEFAULT_LAYER_ORDER = EDITOR_DEFAULTS.layerOrder.slice();
+
+function stripLegacyBobbinShadowTune(tune) {
+  if (!tune || typeof tune !== 'object') return tune;
+  for (const key of Object.keys(tune)) {
+    if (/^bobbinShadow(?:Idle|Rail)(?:Opacity|Angle|Size|OffsetX|OffsetY)$/.test(key)) {
+      delete tune[key];
+    }
+  }
+  return tune;
+}
 
 // Human-readable Korean names for each Game.layers.* key (used in the inspector).
 const LAYER_NAMES_KO = {
@@ -759,7 +755,7 @@ let EditorTune = (() => {
         // Merge saved values OVER defaults instead of dropping them on a version
         // mismatch. New keys added in this build get their defaults; existing
         // user edits survive across schema bumps.
-        const merged = { ...EDITOR_DEFAULTS, ...parsed, version: EDITOR_DEFAULTS.version };
+        const merged = stripLegacyBobbinShadowTune({ ...EDITOR_DEFAULTS, ...parsed, version: EDITOR_DEFAULTS.version });
         merged.layerOrder = Array.isArray(parsed.layerOrder) && parsed.layerOrder.length
           ? parsed.layerOrder.slice()
           : EDITOR_DEFAULTS.layerOrder.slice();
@@ -784,6 +780,7 @@ async function loadEditorTuneFromFile() {
   // localStorage or whether editor_tune.json is reachable.
   if (EDITOR_TUNE_OVERRIDE && typeof EDITOR_TUNE_OVERRIDE === 'object') {
     Object.assign(EditorTune, EDITOR_TUNE_OVERRIDE);
+    stripLegacyBobbinShadowTune(EditorTune);
     if (Array.isArray(EDITOR_TUNE_OVERRIDE.layerOrder) && EDITOR_TUNE_OVERRIDE.layerOrder.length) {
       EditorTune.layerOrder = EDITOR_TUNE_OVERRIDE.layerOrder.slice();
     }
@@ -801,6 +798,7 @@ async function loadEditorTuneFromFile() {
       if (typeof parsed.queueGapY !== 'number') parsed.queueGapY = parsed.queueGap;
     }
     Object.assign(EditorTune, parsed);
+    stripLegacyBobbinShadowTune(EditorTune);
     if (Array.isArray(parsed.layerOrder) && parsed.layerOrder.length) {
       EditorTune.layerOrder = parsed.layerOrder.slice();
     }
@@ -835,11 +833,24 @@ const COLOR = {
 };
 
 const WOOL = {
+  // Core 5 (original game palette).
   blue:   { fill: 0x1f70e6, light: 0x66a7ff, dark: 0x0c48b2 },
   red:    { fill: 0xef3a34, light: 0xff7a70, dark: 0xa51f20 },
   white:  { fill: 0xeeeade, light: 0xffffff, dark: 0xb8b0a0 },
   black:  { fill: 0x22222a, light: 0x50505a, dark: 0x050507 },
   orange: { fill: 0xf47c12, light: 0xffb15a, dark: 0xa54b08 },
+  // Expanded palette: covers the colors most commonly missing when users
+  // paste arbitrary pixel-art images (was being snapped to nearest of the
+  // 5 above, producing flattened results). Bobbins of these colors tint
+  // correctly because rendering uses PIXI sprite tint with the fill RGB.
+  yellow:   { fill: 0xf4cc12, light: 0xffe66a, dark: 0xa58908 },
+  green:    { fill: 0x4caf50, light: 0x80d684, dark: 0x2b6b2e },
+  darkgreen:{ fill: 0x2e7d32, light: 0x5fb663, dark: 0x1a4d1d },
+  cyan:     { fill: 0x29b6f6, light: 0x73e0ff, dark: 0x0d7fb0 },
+  purple:   { fill: 0x7c4dff, light: 0xb392ff, dark: 0x4e2eb3 },
+  pink:     { fill: 0xe87aa6, light: 0xffaecf, dark: 0x9e4c70 },
+  brown:    { fill: 0x8b5a2b, light: 0xc18a5a, dark: 0x5a3818 },
+  gray:     { fill: 0x808080, light: 0xb0b0b0, dark: 0x505050 },
 };
 
 const QUEUE_VISIBLE_MAX = 6;
@@ -935,11 +946,23 @@ function countPatternCells(cells) {
 
 function createBobbinDeck(cells) {
   const remaining = countPatternCells(cells);
-  const order = [
+  // Priority order. The original 5 colors stay weighted higher (so chicken-
+  // pattern decks feel the same), then any extra wool colors that show up
+  // in `remaining` get drained on the same pass so pasted images with
+  // yellow/green/pink/etc. cells still get matching bobbins.
+  const priority = [
     'blue', 'blue', 'black', 'black', 'blue', 'white',
     'red', 'white', 'orange', 'blue', 'black', 'blue',
     'white', 'orange', 'blue', 'black', 'red', 'blue',
   ];
+  // Append every other WOOL key (not already in priority) so no color is
+  // orphaned. Without this, pasted images with new colors would leave
+  // unpullable cells with no matching bobbin.
+  const visited = new Set(priority);
+  const order = [...priority];
+  for (const k of Object.keys(WOOL)) {
+    if (!visited.has(k)) { order.push(k); visited.add(k); }
+  }
   const deck = [];
   let guard = 0;
   while (Object.values(remaining).some(v => v > 0) && guard++ < 1000) {
@@ -961,7 +984,101 @@ function createBobbinDeck(cells) {
 const PATTERN_OVERRIDE = null;
 // EDITOR_TUNE_OVERRIDE is injected by the "스테이지 빌드" export from the
 // editor. When non-null, it wins over editor_tune.json + localStorage at boot.
-const EDITOR_TUNE_OVERRIDE = null;
+const EDITOR_TUNE_OVERRIDE = {
+  "version": "unity-editor-2026-05-19-v4-tray-boarding",
+  "arrowRadiusX": 0.66,
+  "arrowRadiusY": 0.8,
+  "arrowSize": 0.32,
+  "arrowCount": 20,
+  "arrowSecPerLap": 14,
+  "arrowOffsetX": -0.001,
+  "arrowOffsetY": -0.027634728144989337,
+  "bobbinIdleScale": 2.1,
+  "bobbinIdleRotationDeg": 0,
+  "bobbinIdleYRotationDeg": 0,
+  "bobbinIdleXRotationDeg": 40.5,
+  "bobbinSpriteScale": 2,
+  "bobbinRailRotationDeg": 0,
+  "bobbinYRotationDeg": 0,
+  "bobbinXRotationDeg": 0,
+  "dumpX": -0.7634905557491846,
+  "dumpY": 0.8828244936034115,
+  "trayDumpRotationDeg": 65,
+  "trayIdleScale": 1.9,
+  "trayIdleYRotationDeg": 8.519531249999995,
+  "trayIdleXRotationDeg": 58.375781249999996,
+  "trayScale": 1.82,
+  "trayDumpVisible": 1,
+  "trayLaunchedRotationDeg": 65,
+  "trayYRotationDeg": 0,
+  "trayTiltDeg": 60,
+  "queueCols": 3,
+  "queueGap": 0.2,
+  "queueBobbinScale": 1.15,
+  "slotSize": 71.33960402189997,
+  "slotXOffset": 0,
+  "slotYOffset": 92.96875,
+  "queueXOffset": 0,
+  "queueYOffset": -204.0703125,
+  "counterFontSize": 28,
+  "counterOffsetX": -37.53125,
+  "counterOffsetY": 49.09765625,
+  "railOffsetX": 0,
+  "railOffsetY": 0,
+  "gridScaleX": 1.111,
+  "gridScaleY": 0.992,
+  "gridShiftX": 0.65625,
+  "gridShiftY": -4.586,
+  "arrowHideStart": 0.9,
+  "arrowHideEnd": 0,
+  "brushOffsetX": -0.9549733475479745,
+  "brushOffsetY": 0.7768190298507462,
+  "brushScale": 0.8172342759929038,
+  "gridBgColor": 793911,
+  "gridBgAlpha": 1,
+  "gridFabricColor": 2060518,
+  "gridFabricAlpha": 0,
+  "gridBgPad": 0.45,
+  "gridBgPadX": 0.24,
+  "gridBgPadY": 0.36,
+  "gridBgCornerRadius": 0.16,
+  "trayThickness": 0.7,
+  "trayIdleZRotationDeg3D": 0.5,
+  "trayRailZRotationDeg3D": 0,
+  "trayStackSpacing": 0.56,
+  "bobbinBarrelR": 1.25,
+  "bobbinFlangeTopH": 1.9,
+  "bobbinFlangeBottomH": 1.9,
+  "trayRailFlat": 0.05,
+  "bobbinShadowIntensity": 0.54,
+  "bobbinShadowAngleDeg": 30,
+  "bobbinShadowDistance": 0.12,
+  "bobbinShadowRangeX": 1,
+  "bobbinShadowRangeY": 1,
+  "bobbinShadowOffsetX": 0,
+  "bobbinShadowOffsetY": 10,
+  "launchEndT": 0.05,
+  "bobbinOnTrayOffsetY": 0,
+  "bobbinRailBarrelR": 1.25,
+  "bobbinRailFlangeTopH": 1.9,
+  "bobbinRailFlangeBottomH": 1.9,
+  "slotBobbinOffsetX": 0,
+  "slotBobbinOffsetY": -15.06640625,
+  "queueGapX": 0.2,
+  "queueGapY": 0.05,
+  "layerOrder": [
+    "bg",
+    "hoop",
+    "wool",
+    "thread",
+    "carrier",
+    "slotBg",
+    "bobbin",
+    "fx",
+    "ui"
+  ],
+  "_gridColorUnified": true
+};
 // Session-stored pattern from the map tool's "테스트" button.
 function _loadSessionPattern() {
   try {
@@ -1493,10 +1610,38 @@ class Bobbin {
   static _nextId = 1;
 
   _drawShadow(_isWaiting) {
-    // Real shadow is now baked into the Three.js pre-render (ShadowMaterial
-    // ground plane in buildBobbinGroup), so the PIXI Graphics ellipse is
-    // intentionally a no-op. Kept as a stub so any callers stay valid.
-    if (this.shadow) this.shadow.clear();
+    if (!this.shadow) return;
+    const isWaiting = this.orientation !== 'lying';
+    const scale = EditorTune.bobbinIdleScale ?? EditorTune.bobbinSpriteScale;
+    const size = Layout.bobbinSize * scale;
+    const opacity = clamp(EditorTune.bobbinShadowIntensity ?? 0.54, 0, 1);
+    const rangeX = Math.max(0.05, EditorTune.bobbinShadowRangeX ?? 1);
+    const rangeY = Math.max(0.05, EditorTune.bobbinShadowRangeY ?? 1);
+    const angleDeg = EditorTune.bobbinShadowAngleDeg ?? 30;
+    const distance = Math.max(0, EditorTune.bobbinShadowDistance ?? 0.12) * size;
+    const ox = EditorTune.bobbinShadowOffsetX ?? 0;
+    const oy = EditorTune.bobbinShadowOffsetY ?? 10;
+
+    this.shadow.clear();
+    if (opacity <= 0.001) return;
+    this.shadow.rotation = -this.gfx.rotation;
+
+    // Reference shadow: a soft, screen-space, down-right ground contact.
+    const a = deg2rad(angleDeg);
+    const baseX = Math.sin(a) * distance + ox;
+    const baseY = Math.cos(a) * distance + oy;
+    const rx = size * (isWaiting ? 0.40 : 0.46) * rangeX;
+    const ry = size * (isWaiting ? 0.18 : 0.16) * rangeY;
+    const layers = [
+      { k: 1.42, a: 0.10 },
+      { k: 1.10, a: 0.16 },
+      { k: 0.78, a: 0.22 },
+    ];
+    for (const layer of layers) {
+      this.shadow.beginFill(0x203141, opacity * layer.a);
+      this.shadow.drawEllipse(baseX, baseY, rx * layer.k, ry * layer.k);
+      this.shadow.endFill();
+    }
   }
 
   _updateLabelStyle() {
@@ -1609,6 +1754,7 @@ class Bobbin {
     } else {
       this._scale = lerp(this._scale, 1, 0.2);
     }
+    if (this.shadow) this.shadow.rotation = -this.gfx.rotation;
     this.gfx.scale.set(this._scale);
   }
 
@@ -1684,13 +1830,13 @@ function drawReferenceTrayPlate(g, w, h, alpha = 1) {
 }
 
 function createReferenceTrayPlate() {
-  // Returns a Container holding a Sprite of the upright tray texture
+  // Returns a Container holding a Sprite of the dump tray texture
   // (pre-rendered from model_optimized.glb). Falls back to a flat plate
   // graphic when the texture isn't loaded yet.
   // Sized to Layout.bobbinSize — the caller (Carrier.updateVisualStyle)
   // multiplies by EditorTune.trayIdleScale via container.scale.
   const node = new PIXI.Container();
-  const tex = Game.tex?.trayUpright || Game.tex?.tray;
+  const tex = Game.tex?.trayDump || Game.tex?.trayLying || Game.tex?.trayUpright || Game.tex?.tray;
   if (tex) {
     const sp = new PIXI.Sprite(tex);
     sp.anchor.set(0.5);
@@ -1708,7 +1854,7 @@ function createReferenceTrayPlate() {
 
 function drawReferenceTrayStack(container, count) {
   if (!EditorTune.trayDumpVisible || count <= 0) return;
-  const tex = Game.tex?.trayUpright || Game.tex?.tray;
+  const tex = Game.tex?.trayDump || Game.tex?.trayLying || Game.tex?.trayUpright || Game.tex?.tray;
   const s = Layout.bobbinSize * EditorTune.trayIdleScale;
   const stack = new PIXI.Container();
   stack.rotation = deg2rad(EditorTune.trayDumpRotationDeg || 0);
@@ -1757,7 +1903,7 @@ class Carrier {
   constructor(orientation = 'upright') {
     this.gfx = new PIXI.Container();
     this.orientation = orientation;
-    const texU = Game.tex?.trayUpright || Game.tex?.tray;
+    const texU = Game.tex?.trayDump || Game.tex?.trayLying || Game.tex?.trayUpright || Game.tex?.tray;
     const texL = Game.tex?.trayLying || Game.tex?.tray;
     if (texU || texL) {
       this.upright = createReferenceTrayPlate();
@@ -1779,7 +1925,13 @@ class Carrier {
   }
   refreshTextures() {
     if (!this.upright || !this.lying) return;
+    const uprightAlpha = this.upright.alpha;
     if (Game.tex?.trayLying)   this.lying.texture   = Game.tex.trayLying;
+    if (this.upright.parent) this.upright.parent.removeChild(this.upright);
+    if (!this.upright.destroyed) this.upright.destroy({ children: true });
+    this.upright = createReferenceTrayPlate();
+    this.upright.alpha = uprightAlpha;
+    this.gfx.addChild(this.upright);
     this.lying.tint = COLOR.trayTint;
     this.updateVisualStyle();
   }
@@ -1792,7 +1944,7 @@ class Carrier {
     const lyingSize = Layout.bobbinSize * (EditorTune.trayIdleScale ?? EditorTune.trayScale);
     this.upright.scale.set(EditorTune.trayIdleScale);
     this.lying.width = this.lying.height = lyingSize;
-    this.upright.rotation = deg2rad(EditorTune.trayDumpRotationDeg || 0);
+    this.upright.rotation = 0;
     this.lying.rotation = 0;
   }
   setOrientation(orientation, instant = false) {
@@ -1849,6 +2001,7 @@ const Game = {
   slots: [],       // length 5, slot[i] = {bobbin, sprite}|null
   rail: [],        // array of active RailEntry
   dumpCount: GameTune.carrier.total, // carriers available in dump
+  trayStack: [],   // persistent Carrier objects in dump, front → back
   inFlightCarriers: [], // {phase, t, ...}
   clickCooldownT: 0,
   clearedColors: new Set(),
@@ -1866,6 +2019,7 @@ const Game = {
 
   // RailEntry: { bobbin, t, carrier, lastPullKey, eligible (for boost looping) }
 };
+window.Game = Game;
 
 /* =========================================================================
  *  Asset Loading
@@ -1954,8 +2108,9 @@ async function preRender3DAssets() {
   dir2.position.set(2, 1.2, -2);
   scene.add(dir2);
 
-  // Dedicated shadow-caster: low-intensity (= no light contribution), the
-  // position is reset per-render to match the orientation's editor knobs.
+  // Legacy 3D shadow receiver is disabled below. Keep this light stable so
+  // bobbin pre-rendering remains deterministic; runtime shadows are drawn
+  // in PIXI by Bobbin._drawShadow().
   const shadowLight = new THREE.DirectionalLight(0xffffff, 0);
   shadowLight.castShadow = true;
   shadowLight.shadow.camera.near = 0.5;
@@ -1969,64 +2124,18 @@ async function preRender3DAssets() {
   shadowLight.shadow.bias = -0.0005;
   scene.add(shadowLight);
 
-  // Per-orientation shadow update. Called before each bobbin stage render
-  // so the same `shadowLight` casts a different-looking shadow for idle
-  // vs rail (matches each state's editor knobs).
-  //
-  // NOTE: visible shadow position is controlled by LIGHT position, NOT by
-  // ground plane position. The ground plane is just a receiver — it shows
-  // the shadow wherever the light projects the occluder onto it. Moving
-  // the ground around doesn't move the visible shadow (shadow stays at the
-  // occluder's foot in world space). The user's "offset" knob is therefore
-  // applied to the light: the sun moves east, the shadow falls west, so we
-  // negate the offset on the light to get the intuitive "+X = shadow right"
-  // behaviour.
-  const configureShadow = (orientation) => {
-    const isRail = orientation === 'lying';
-    const angleDeg = isRail
-      ? (EditorTune.bobbinShadowRailAngle ?? 30)
-      : (EditorTune.bobbinShadowIdleAngle ?? 30);
-    const sizeMul = isRail
-      ? (EditorTune.bobbinShadowRailSize ?? 1)
-      : (EditorTune.bobbinShadowIdleSize ?? 1);
-    const ox = isRail
-      ? (EditorTune.bobbinShadowRailOffsetX ?? 0)
-      : (EditorTune.bobbinShadowIdleOffsetX ?? 0);
-    const oz = isRail
-      ? (EditorTune.bobbinShadowRailOffsetY ?? 0)
-      : (EditorTune.bobbinShadowIdleOffsetY ?? 0);
-    // Larger sizeMul → light closer to ground → bigger softer shadow.
-    const lightY = 6.0 / Math.max(0.3, sizeMul);
-    const radius = 0.5 * sizeMul;
-    const a = deg2rad(angleDeg);
-    // Subtract the offset on each axis so positive offset visually drifts
-    // the shadow in that direction (light moves opposite → shadow follows).
-    shadowLight.position.set(
-      Math.sin(a) * radius - ox,
-      lightY,
-      Math.cos(a) * radius - oz,
-    );
-    shadowLight.shadow.radius = 3 * sizeMul;
-    // Widen the shadow camera frustum proportional to the offset so the
-    // shadow doesn't clip when the user drives offsetX/Y to the edges. The
-    // base frustum was ±1.8 — extend by |ox|+|oz| plus a little safety pad.
-    const frustumPad = 1.8 + Math.max(Math.abs(ox), Math.abs(oz));
-    shadowLight.shadow.camera.left   = -frustumPad;
-    shadowLight.shadow.camera.right  =  frustumPad;
-    shadowLight.shadow.camera.top    =  frustumPad;
-    shadowLight.shadow.camera.bottom = -frustumPad;
+  const configureShadow = () => {
+    shadowLight.position.set(0, 6, 0.5);
+    shadowLight.shadow.radius = 3;
+    shadowLight.shadow.camera.left   = -1.8;
+    shadowLight.shadow.camera.right  =  1.8;
+    shadowLight.shadow.camera.top    =  1.8;
+    shadowLight.shadow.camera.bottom = -1.8;
     shadowLight.shadow.camera.updateProjectionMatrix();
   };
   const configureShadowGround = (groundMesh, orientation) => {
-    const isRail = (orientation === 'lying');
-    const op = isRail
-      ? (EditorTune.bobbinShadowRailOpacity ?? 0.38)
-      : (EditorTune.bobbinShadowIdleOpacity ?? 0.38);
-    groundMesh.material.opacity = Math.max(0, Math.min(1, op));
-    groundMesh.visible = op > 0.001;
-    // Ground stays anchored at world (0, -0.78, 0). It only acts as a
-    // receiver — see configureShadow above for why offsetX/Y live on the
-    // light position instead.
+    groundMesh.material.opacity = 0;
+    groundMesh.visible = false;
   };
 
   const makeMaterial = (kind = 'bobbin') => {
@@ -2198,13 +2307,9 @@ async function preRender3DAssets() {
     return group;
   };
 
-  // Build a ShadowMaterial ground plane in WORLD space (NOT parented to
-  // the bobbin group — otherwise the lying outer rotation flips the plane
-  // upside-down and the shadow falls on the unseen back face). Opacity
-  // tuned to read as a gentle drop shadow, not a hard-edged silhouette.
-  // Plane size is generous (8×8) so the cast shadow has room to drift
-  // when the user pushes bobbinShadow*OffsetX/Y to the edges of their
-  // ±2 range without falling off the receiver.
+  // Legacy receiver plane kept structurally for the pre-render loop, but
+  // configureShadowGround hides it. Bobbin shadows are drawn in PIXI so the
+  // editor can update them live without re-rendering the 3D textures.
   const makeShadowGround = () => {
     const geo = new THREE.PlaneGeometry(8, 8);
     const mat = new THREE.ShadowMaterial({ opacity: 0.38 });
@@ -2223,9 +2328,7 @@ async function preRender3DAssets() {
     const xDeg = orientation === 'lying'
       ? (EditorTune.bobbinXRotationDeg ?? -6)
       : (EditorTune.bobbinIdleXRotationDeg ?? 0);
-    // Configure the shadow light + ground for this orientation once per
-    // stage batch (ortho/angle/size only depends on orientation, not on
-    // the ring count).
+    // Keep the disabled legacy shadow setup deterministic.
     configureShadow(orientation);
     for (let rings = 0; rings <= 10; rings++) {
       clearAddedMeshes();
@@ -2297,6 +2400,12 @@ async function preRender3DAssets() {
   };
   const trayLying   = await renderTrayAt(EditorTune.trayYRotationDeg || 0, EditorTune.trayTiltDeg, 'lying');
   const trayUpright = await renderTrayAt(EditorTune.trayIdleYRotationDeg || 0, 0, 'upright');
+  // Dump trays should start in the same physical pose they launch from.
+  // The earlier version baked a vertical "upright" tray, then rotated that
+  // sprite in 2D, which made the stack look edge-on and caused a pop when the
+  // front tray started moving. Use the rail/lying texture for the dump stack
+  // as the reference does: one real tray, already in its sliding pose.
+  const trayDump = trayLying;
   const trayTex = trayLying;
 
   // Keep the Three.js renderer/scene alive globally so we can re-render
@@ -2310,7 +2419,7 @@ async function preRender3DAssets() {
     renderBobbinStagesAt,
   };
 
-  return { bobbinStages, bobbinStagesUpright, tray: trayTex, trayUpright, trayLying };
+  return { bobbinStages, bobbinStagesUpright, tray: trayTex, trayUpright, trayLying, trayDump };
 }
 
 /* =========================================================================
@@ -2354,12 +2463,14 @@ async function boot() {
     Game.tex.tray = tex3D.tray;
     Game.tex.trayUpright = tex3D.trayUpright;
     Game.tex.trayLying = tex3D.trayLying;
+    Game.tex.trayDump = tex3D.trayDump;
   } catch (e) {
     console.warn('3D pre-render failed, falling back to procedural', e);
     Game.tex.bobbinStages = null;
     Game.tex.tray = null;
     Game.tex.trayUpright = null;
     Game.tex.trayLying = null;
+    Game.tex.trayDump = null;
   }
 
   Layout.compute(window.innerWidth, window.innerHeight);
@@ -2854,11 +2965,75 @@ function drawDump() {
   Game.layers.ui.addChild(c);
   redrawDump();
 }
+
+function createStoredTray() {
+  const carrier = new Carrier('upright');
+  carrier.gfx.eventMode = 'none';
+  carrier.gfx.cursor = 'default';
+  return carrier;
+}
+
+function ensureTrayStack() {
+  if (!Array.isArray(Game.trayStack)) Game.trayStack = [];
+  while (Game.trayStack.length < Game.dumpCount) {
+    Game.trayStack.push(createStoredTray());
+  }
+  if (Game.trayStack.length > Game.dumpCount) {
+    Game.trayStack.length = Game.dumpCount;
+  }
+}
+
+function layoutDumpTray(carrier, slotIndex) {
+  const s = Layout.bobbinSize * EditorTune.trayIdleScale;
+  const stackSpacing = 0.18 * (EditorTune.trayStackSpacing ?? 1.0);
+  const off = slotIndex * s * stackSpacing;
+  carrier.gfx.alpha = 1;
+  carrier.gfx.scale.set(1);
+  carrier.gfx.rotation = deg2rad(EditorTune.trayDumpRotationDeg || 0);
+  carrier.gfx.x = -off * 0.15;
+  carrier.gfx.y = -off;
+  carrier.setOrientation?.('upright', true);
+}
+
 function redrawDump() {
   const c = Game.dumpGfx;
   c.removeChildren();
-  // Reference-style ribbed tray stack inside the blue feeder dock.
-  drawReferenceTrayStack(c, Game.dumpCount);
+  if (!EditorTune.trayDumpVisible) return;
+  ensureTrayStack();
+  // Draw back → front so the front tray remains visually on top.
+  for (let i = Game.trayStack.length - 1; i >= 0; i--) {
+    const carrier = Game.trayStack[i];
+    layoutDumpTray(carrier, i);
+    c.addChild(carrier.gfx);
+  }
+}
+
+function takeFrontTrayFromDump() {
+  ensureTrayStack();
+  const carrier = Game.trayStack.shift();
+  if (!carrier) return null;
+  const worldX = Layout.dump.x + carrier.gfx.x;
+  const worldY = Layout.dump.y + carrier.gfx.y;
+  if (carrier.gfx.parent) carrier.gfx.parent.removeChild(carrier.gfx);
+  Game.layers.carrier.addChild(carrier.gfx);
+  carrier.gfx.x = worldX;
+  carrier.gfx.y = worldY;
+  carrier.gfx.alpha = 1;
+  carrier.gfx.scale.set(1);
+  carrier.setOrientation?.('lying', true);
+  return carrier;
+}
+
+function putTrayBackToDump(carrier) {
+  if (!carrier) return;
+  if (carrier.gfx.parent) carrier.gfx.parent.removeChild(carrier.gfx);
+  carrier.gfx.alpha = 1;
+  carrier.gfx.scale.set(1);
+  carrier.setOrientation?.('upright', true);
+  Game.trayStack.push(carrier);
+  addToDumpCount(+1);
+  updateCounter();
+  redrawDump();
 }
 
 function buildCounter() {
@@ -3104,24 +3279,22 @@ function onClickSlot(i) {
 
 function launchBobbin(bobbin) {
   Game.clickCooldownT = GameTune.rail.clickCooldown;
+  AudioSystem.launch(bobbin.color);
+
+  // Phase 1: move the actual FRONT tray from the dump mouth. The same
+  // Carrier object leaves the stack, rides the rail, then returns to the
+  // back of the stack.
+  // landingT controls how far past the rail entry the launch ends — past
+  // ~0.04 puts the landed bobbin clear of the brush sprite.
+  const landingT = clamp(EditorTune.launchEndT ?? 0.05, 0, 0.95);
+  const startPos = RailPath.position(landingT);
+  const finalTrayRot = startPos.angle + deg2rad(EditorTune.trayLaunchedRotationDeg);
+  const carrier = takeFrontTrayFromDump();
+  if (!carrier) return;
   addToDumpCount(-1);
   updateCounter();
   redrawDump();
-  AudioSystem.launch(bobbin.color);
 
-  // Phase 1: spawn carrier from dump — already in the LYING (flat) form so
-  // the launching tray reads as a single piece sliding cleanly forward
-  // (reference behaviour). The dump's upright "card" sprites are separate
-  // and stay in the stack; only the in-flight tray uses the lying art.
-  // landingT controls how far past the rail entry the launch ends — past
-  // ~0.04 puts the landed bobbin clear of the brush sprite.
-  const carrier = new Carrier('lying');
-  carrier.gfx.x = Layout.dump.x;
-  carrier.gfx.y = Layout.dump.y;
-  Game.layers.carrier.addChild(carrier.gfx);
-
-  const landingT = clamp(EditorTune.launchEndT ?? 0.05, 0, 0.95);
-  const startPos = RailPath.position(landingT);
   spawnLaunchGlow(startPos.x, startPos.y, bobbin.color);
 
   // Bobbin: float up to carrier
@@ -3136,12 +3309,13 @@ function launchBobbin(bobbin) {
     duration: GameTune.visual.bobbinEnterRail,
     carrier,
     bobbin,
-    fromCarrierPos: { x: Layout.dump.x, y: Layout.dump.y },
+    fromCarrierPos: { x: carrier.gfx.x, y: carrier.gfx.y },
+    fromCarrierRot: carrier.gfx.rotation,
     // Via-point the tray must pass THROUGH at u=0.5 (not just curve toward).
     // Bigger X offset = more visible slide out of the brush.
     trayBoardPos: {
       x: Layout.dump.x + Layout.bobbinSize * 1.05,
-      y: Layout.dump.y + Layout.bobbinSize * 0.38,
+      y: startPos.y,
     },
     landingT,
     bobbinFrom: bobbinStart,
@@ -3181,6 +3355,11 @@ function tweenTo(obj, x, y, duration) {
 
 function easeOutCubic(u) { return 1 - Math.pow(1 - u, 3); }
 function easeInOutQuad(u) { return u < 0.5 ? 2 * u * u : 1 - Math.pow(-2 * u + 2, 2) / 2; }
+function lerpAngle(a, b, t) {
+  let d = (b - a + Math.PI) % (Math.PI * 2) - Math.PI;
+  if (d < -Math.PI) d += Math.PI * 2;
+  return a + d * t;
+}
 function phaseEase(u, start, end) {
   return easeInOutQuad(clamp((u - start) / Math.max(0.0001, end - start), 0, 1));
 }
@@ -3496,28 +3675,21 @@ function finishBobbinExhausted(entry) {
   const idx = Game.rail.indexOf(entry);
   if (idx >= 0) Game.rail.splice(idx, 1);
 
-  // Carrier is freed immediately (counter +1, clamped)
-  addToDumpCount(+1);
-  updateCounter();
-  redrawDump();
-
   // Sparkle at the spot where the bobbin exhausted
   const x = entry.bobbin.gfx.x;
   const y = entry.bobbin.gfx.y;
   spawnSparkle(x, y);
   AudioSystem.pop();
 
-  // Fade out bobbin + carrier in place, slight scale-up, then destroy
+  // Fade out only the bobbin. The same tray object flies back to the dump
+  // and is inserted behind the stored trays.
   const bgfx = entry.bobbin.gfx;
-  const cgfx = entry.carrier.gfx;
+  returnCarrierToDump(entry.carrier, GameTune.visual.carrierReturnFast);
   addAnim(0.35, (eu) => {
     if (!bgfx.destroyed) { bgfx.alpha = 1 - eu; bgfx.scale.set(1 + eu * 0.25); }
-    if (!cgfx.destroyed) { cgfx.alpha = 1 - eu; cgfx.scale.set(1 + eu * 0.25); }
   }, () => {
     if (bgfx.parent) bgfx.parent.removeChild(bgfx);
     if (!bgfx.destroyed) bgfx.destroy({ children: true });
-    if (cgfx.parent) cgfx.parent.removeChild(cgfx);
-    if (!cgfx.destroyed) cgfx.destroy({ children: true });
   });
 }
 
@@ -3671,18 +3843,32 @@ function spawnSparkle(x, y) {
 function returnCarrierToDump(carrier, duration) {
   const sx = carrier.gfx.x, sy = carrier.gfx.y;
   const sr = carrier.gfx.rotation;
-  const tx = Layout.dump.x, ty = Layout.dump.y;
+  const returnSlot = Game.trayStack?.length ?? Game.dumpCount;
+  const s = Layout.bobbinSize * EditorTune.trayIdleScale;
+  const stackSpacing = 0.18 * (EditorTune.trayStackSpacing ?? 1.0);
+  const off = returnSlot * s * stackSpacing;
+  const tx = Layout.dump.x - off * 0.15;
+  const ty = Layout.dump.y - off;
+  carrier.gfx.alpha = 1;
+  carrier.gfx.scale.set(1);
+  if (carrier.upright) carrier.upright.rotation = 0;
+  const q = (a, b, c, t) => lerp(lerp(a, b, t), lerp(b, c, t), t);
+  const mid = {
+    x: Layout.dump.x + Layout.bobbinSize * 0.22,
+    y: Math.min(sy, Layout.dump.y + Layout.bobbinSize * 0.52),
+  };
+  const settleRot = deg2rad(EditorTune.trayDumpRotationDeg || 0);
   addAnim(duration, (eu, u) => {
-    carrier.gfx.x = lerp(sx, tx, eu);
-    carrier.gfx.y = lerp(sy, ty, eu);
-    carrier.gfx.rotation = lerp(sr, 0, eu);
-    if (carrier.applyFade) carrier.applyFade('lying', 'upright', u);
+    const travelU = phaseEase(u, 0.02, 0.86);
+    carrier.gfx.x = q(sx, mid.x, tx, travelU);
+    carrier.gfx.y = q(sy, mid.y, ty, travelU);
+
+    const settleU = phaseEase(u, 0.58, 1.0);
+    const pathRot = lerpAngle(sr, settleRot - 0.18, phaseEase(u, 0.05, 0.62));
+    carrier.gfx.rotation = lerpAngle(pathRot, settleRot, settleU);
+    if (carrier.applyFade) carrier.applyFade('lying', 'upright', phaseEase(u, 0.46, 0.94));
   }, () => {
-    if (carrier.gfx.parent) carrier.gfx.parent.removeChild(carrier.gfx);
-    if (!carrier.gfx.destroyed) carrier.gfx.destroy({ children: true });
-    addToDumpCount(+1);
-    updateCounter();
-    redrawDump();
+    putTrayBackToDump(carrier);
   });
 }
 
@@ -3706,13 +3892,8 @@ function tickInFlight(dt) {
       const trayU = phaseEase(u, 0.14, 0.92);
       f.carrier.gfx.x = q(f.fromCarrierPos.x, ctrlX, sp.x, trayU);
       f.carrier.gfx.y = q(f.fromCarrierPos.y, ctrlY, sp.y, trayU);
-      // Carrier is already in lying form (see launchBobbin) — keep its 2D
-      // rotation locked to the rail angle the whole time so the tray slides
-      // cleanly without any "tilting up from the bottom" effect. Also add
-      // trayLaunchedRotationDeg so the in-flight tray matches the on-rail
-      // facing direction (otherwise the tray would visibly snap rotation
-      // the moment it crosses from launching to on-rail).
-      f.carrier.gfx.rotation = sp.angle + deg2rad(EditorTune.trayLaunchedRotationDeg);
+      const finalTrayRot = sp.angle + deg2rad(EditorTune.trayLaunchedRotationDeg);
+      f.carrier.gfx.rotation = lerpAngle(f.fromCarrierRot ?? 0, finalTrayRot, trayU);
 
       if (!f.bobbinLaid && u > 0.48) {
         f.bobbinLaid = true;
@@ -3908,6 +4089,7 @@ const EditorTool = {
 
     // Save / Reset / Export
     document.getElementById('ed-save').addEventListener('click', async () => {
+      stripLegacyBobbinShadowTune(EditorTune);
       // Always write to localStorage so the next reload restores values even
       // when the page is opened directly (file://).
       let local = false;
@@ -3945,6 +4127,7 @@ const EditorTool = {
       flashEditorMessage('기본값 복원 ✓');
     });
     document.getElementById('ed-export').addEventListener('click', async () => {
+      stripLegacyBobbinShadowTune(EditorTune);
       const json = JSON.stringify(EditorTune, null, 2);
       try {
         await navigator.clipboard.writeText(json);
@@ -4323,6 +4506,11 @@ const EditorTool = {
     if (key === 'arrowSecPerLap') return Math.max(0.5, v);
     if (key === 'arrowHideStart' || key === 'arrowHideEnd') return Math.max(0, Math.min(1, v));
     if (key === 'trayDumpVisible') return v >= 0.5 ? 1 : 0;
+    if (key === 'bobbinShadowIntensity') return Math.max(0, Math.min(1, v));
+    if (key === 'bobbinShadowAngleDeg') return Math.max(0, Math.min(360, v));
+    if (key === 'bobbinShadowDistance') return Math.max(0, Math.min(0.6, v));
+    if (key === 'bobbinShadowRangeX' || key === 'bobbinShadowRangeY') return Math.max(0.2, Math.min(3, v));
+    if (key === 'bobbinShadowOffsetX' || key === 'bobbinShadowOffsetY') return Math.max(-120, Math.min(120, v));
     // Color: 24-bit int 0..0xFFFFFF.
     if (key === 'gridBgColor' || key === 'gridFabricColor') return Math.max(0, Math.min(0xFFFFFF, Math.round(v)));
     if (key === 'gridBgAlpha' || key === 'gridFabricAlpha') return Math.max(0, Math.min(1, v));
@@ -4348,6 +4536,7 @@ const EditorTool = {
       const src = await fetch(location.href, { cache: 'no-store' }).then(r => r.text());
 
       // Editor values
+      stripLegacyBobbinShadowTune(EditorTune);
       const tuneJson = JSON.stringify(EditorTune, null, 2);
       const tuneLine = `const EDITOR_TUNE_OVERRIDE = ${tuneJson};`;
       let next = src.replace(/const EDITOR_TUNE_OVERRIDE\s*=\s*[^;]+;/, tuneLine);
@@ -4683,6 +4872,16 @@ const EditorTool = {
   },
 };
 
+const BOBBIN_SHADOW_EDITOR_FIELDS = [
+  { key: 'bobbinShadowIntensity', label: '그림자 강도',       step: 0.02, min: 0,    max: 1 },
+  { key: 'bobbinShadowAngleDeg',  label: '그림자 각도 (°)',   step: 1,    min: 0,    max: 360 },
+  { key: 'bobbinShadowDistance',  label: '그림자 거리 (비율)', step: 0.01, min: 0,    max: 0.6 },
+  { key: 'bobbinShadowRangeX',    label: '그림자 범위 X',      step: 0.05, min: 0.2,  max: 3 },
+  { key: 'bobbinShadowRangeY',    label: '그림자 범위 Y',      step: 0.05, min: 0.2,  max: 3 },
+  { key: 'bobbinShadowOffsetX',   label: '그림자 위치 X (px)', step: 1,    min: -120, max: 120 },
+  { key: 'bobbinShadowOffsetY',   label: '그림자 위치 Y (px)', step: 1,    min: -120, max: 120 },
+];
+
 function buildEditorAssetRegistry() {
   const oh = () => Math.max(1, Layout.hoop.outerHalf);
   return [
@@ -4794,11 +4993,7 @@ function buildEditorAssetRegistry() {
           { key: 'bobbinBarrelR',           label: '중앙 기둥 굵기',  step: 0.05, min: 0.2, max: 3 },
           { key: 'bobbinFlangeTopH',        label: '상단 굵기',        step: 0.05, min: 0.1, max: 5 },
           { key: 'bobbinFlangeBottomH',     label: '하단 굵기',        step: 0.05, min: 0.1, max: 5 },
-          { key: 'bobbinShadowIdleOpacity', label: '그림자 강도',       step: 0.02, min: 0,    max: 1 },
-          { key: 'bobbinShadowIdleAngle',   label: '그림자 각도 (°)',   step: 1,    min: 0,    max: 360 },
-          { key: 'bobbinShadowIdleSize',    label: '그림자 크기',       step: 0.05, min: 0.2,  max: 3 },
-          { key: 'bobbinShadowIdleOffsetX', label: '그림자 X 오프셋',    step: 0.02, min: -2,   max: 2 },
-          { key: 'bobbinShadowIdleOffsetY', label: '그림자 Y 오프셋',    step: 0.02, min: -2,   max: 2 },
+          ...BOBBIN_SHADOW_EDITOR_FIELDS,
         ],
       },
     },
@@ -4821,11 +5016,7 @@ function buildEditorAssetRegistry() {
           { key: 'bobbinRailBarrelR',       label: '중앙 기둥 굵기',  step: 0.05, min: 0.2, max: 3 },
           { key: 'bobbinRailFlangeTopH',    label: '상단 굵기',        step: 0.05, min: 0.1, max: 5 },
           { key: 'bobbinRailFlangeBottomH', label: '하단 굵기',        step: 0.05, min: 0.1, max: 5 },
-          { key: 'bobbinShadowRailOpacity', label: '그림자 강도',       step: 0.02, min: 0,    max: 1 },
-          { key: 'bobbinShadowRailAngle',   label: '그림자 각도 (°)',   step: 1,    min: 0,    max: 360 },
-          { key: 'bobbinShadowRailSize',    label: '그림자 크기',       step: 0.05, min: 0.2,  max: 3 },
-          { key: 'bobbinShadowRailOffsetX', label: '그림자 X 오프셋',    step: 0.02, min: -2,   max: 2 },
-          { key: 'bobbinShadowRailOffsetY', label: '그림자 Y 오프셋',    step: 0.02, min: -2,   max: 2 },
+          ...BOBBIN_SHADOW_EDITOR_FIELDS,
         ],
       },
     },
@@ -5343,13 +5534,19 @@ const MapTool = {
 };
 
 function quantizeToWool(r, g, b) {
+  // Perceptually-weighted Euclidean distance: green is weighted heaviest,
+  // then red, then blue (ITU-R BT.601 luma weights). Plain unweighted RGB
+  // was picking, e.g., "purple" for muted gray-blues and "orange" for
+  // skin-tones because it treated blue and green channels as equal.
+  // Weights chosen to match `Y = 0.299R + 0.587G + 0.114B` proportions.
+  const WR = 2, WG = 4, WB = 3;
   let best = null, bestDist = Infinity;
   for (const [key, def] of Object.entries(WOOL)) {
     const wr = (def.fill >> 16) & 0xff;
     const wg = (def.fill >> 8)  & 0xff;
     const wb =  def.fill        & 0xff;
     const dr = r - wr, dg = g - wg, db = b - wb;
-    const d = dr*dr + dg*dg + db*db;
+    const d = WR*dr*dr + WG*dg*dg + WB*db*db;
     if (d < bestDist) { bestDist = d; best = key; }
   }
   return best;
@@ -5450,11 +5647,13 @@ async function replaceGLBAsset(targetKey, file) {
     Game.tex.tray = newLying;
     Game.tex.trayLying = newLying;
     Game.tex.trayUpright = newUpright;
+    Game.tex.trayDump = newLying;
     for (const e of Game.rail) {
       e.carrier?.refreshTextures?.();
       e.carrier?.setOrientation?.('lying', true);
     }
     for (const f of Game.inFlightCarriers) f.carrier?.refreshTextures?.();
+    for (const c of Game.trayStack || []) c.refreshTextures?.();
     redrawDump();
   } else if (targetKey === 'bobbinGLB') {
     Three3D.bobbinGLB = parsed;
@@ -5537,6 +5736,15 @@ function flashEditorMessage(msg) {
   el._timer = setTimeout(() => { el.style.opacity = '0'; }, 1400);
 }
 
+function refreshAllBobbinVisuals() {
+  const all = [];
+  for (const e of Game.queue || []) if (e?.bobbin) all.push(e.bobbin);
+  for (const s of Game.slots || []) if (s?.bobbin) all.push(s.bobbin);
+  for (const e of Game.rail || []) if (e?.bobbin) all.push(e.bobbin);
+  for (const f of Game.inFlightCarriers || []) if (f?.bobbin) all.push(f.bobbin);
+  for (const b of all) b.updateVisualStyle?.();
+}
+
 // Per-key change dispatcher. Most params apply live by being read each frame.
 // Some require a structural rebuild or 3D re-render.
 function applyEditorChange(key) {
@@ -5573,13 +5781,7 @@ function applyEditorChange(key) {
     case 'bobbinIdleScale':
     case 'bobbinIdleRotationDeg':
     case 'bobbinSpriteScale': {
-      const all = [];
-      for (const e of Game.queue) all.push(e.bobbin);
-      for (const s of Game.slots) if (s) all.push(s.bobbin);
-      for (const e of Game.rail) all.push(e.bobbin);
-      for (const b of all) {
-        if (b.updateVisualStyle) b.updateVisualStyle();
-      }
+      refreshAllBobbinVisuals();
       break;
     }
     case 'dumpX':
@@ -5602,6 +5804,7 @@ function applyEditorChange(key) {
       redrawDump();
       for (const e of Game.rail) e.carrier?.updateVisualStyle?.();
       for (const f of Game.inFlightCarriers) f.carrier?.updateVisualStyle?.();
+      for (const c of Game.trayStack || []) c.updateVisualStyle?.();
       break;
     case 'trayIdleYRotationDeg':
     case 'trayIdleXRotationDeg':
@@ -5638,22 +5841,18 @@ function applyEditorChange(key) {
     case 'bobbinRailBarrelR':
     case 'bobbinRailFlangeTopH':
     case 'bobbinRailFlangeBottomH':
-    case 'bobbinShadowIdleOpacity':
-    case 'bobbinShadowIdleAngle':
-    case 'bobbinShadowIdleSize':
-    case 'bobbinShadowIdleOffsetX':
-    case 'bobbinShadowIdleOffsetY':
-    case 'bobbinShadowRailOpacity':
-    case 'bobbinShadowRailAngle':
-    case 'bobbinShadowRailSize':
-    case 'bobbinShadowRailOffsetX':
-    case 'bobbinShadowRailOffsetY':
-      // Procedural shell + shadow setup are baked into the pre-rendered
-      // bobbin textures, so any of these requires re-rendering. Idle keys
-      // re-render upright stages, rail keys re-render lying stages —
-      // reRenderBobbinsY does both.
       reRenderBobbinsY(EditorTune.bobbinYRotationDeg, EditorTune.bobbinIdleYRotationDeg);
       break;
+    case 'bobbinShadowIntensity':
+    case 'bobbinShadowAngleDeg':
+    case 'bobbinShadowDistance':
+    case 'bobbinShadowRangeX':
+    case 'bobbinShadowRangeY':
+    case 'bobbinShadowOffsetX':
+    case 'bobbinShadowOffsetY': {
+      refreshAllBobbinVisuals();
+      break;
+    }
     case 'bobbinIdleYRotationDeg':
     case 'bobbinIdleXRotationDeg':
     case 'bobbinYRotationDeg':
@@ -5799,6 +5998,7 @@ function applyEditorChange(key) {
           f?.bobbin?.updateVisualStyle?.();
           f?.carrier?.updateVisualStyle?.();
         }
+        for (const c of Game.trayStack || []) c?.updateVisualStyle?.();
       } catch (e) { /* tolerate any stage that hasn't booted yet */ }
       break;
   }
@@ -5820,6 +6020,7 @@ function reRenderTrayY(yDeg, tiltDeg, idleYDeg = EditorTune.trayIdleYRotationDeg
       Game.tex.tray = newLying;
       Game.tex.trayLying = newLying;
       Game.tex.trayUpright = newUpright;
+      Game.tex.trayDump = newLying;
       for (const e of Game.rail) {
         if (e.carrier?.refreshTextures) e.carrier.refreshTextures();
         if (e.carrier?.setOrientation) e.carrier.setOrientation('lying', true);
@@ -5827,6 +6028,7 @@ function reRenderTrayY(yDeg, tiltDeg, idleYDeg = EditorTune.trayIdleYRotationDeg
       for (const f of Game.inFlightCarriers) {
         if (f.carrier?.refreshTextures) f.carrier.refreshTextures();
       }
+      for (const c of Game.trayStack || []) c.refreshTextures?.();
       redrawDump();
     }
     reRenderTrayY._running = false;
@@ -5905,6 +6107,7 @@ function tick(deltaFrames) {
  * ========================================================================= */
 window.addEventListener('load', () => {
   boot().catch(err => {
+    window.__bootError = err?.stack || err?.message || String(err);
     console.error('boot error', err);
   });
 });
