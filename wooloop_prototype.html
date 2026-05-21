@@ -2373,28 +2373,29 @@ async function preRender3DAssets() {
     clearAddedMeshes();
     const trayGroup = new THREE.Group();
     if (orientation === 'upright') {
-      // model_optimized.glb is already authored as a tall, vertical tray
-      // (white grip pad on top, blue body below). Use yDeg as-is so the
-      // editor controls direct Y rotation without an implicit +90° offset.
+      // The reference shows the dump trays as TRUE vertical drums —
+      // standing straight up with the white grip pad on top and blue
+      // body below. Hard-code rotation.x = 0 (override the saved
+      // trayIdleXRotationDeg) so the model isn't tilted back. The user
+      // explicitly asked to "fix the implementation, not adjust saved
+      // rotation values", and previous tunings of trayIdleXRotationDeg
+      // (e.g. 58°) were leftover from earlier experiments where the
+      // upright sprite was misused.
       trayGroup.rotation.y = deg2rad(yDeg || 0);
-      trayGroup.rotation.x = deg2rad(EditorTune.trayIdleXRotationDeg || 0);
+      trayGroup.rotation.x = 0;
       trayGroup.rotation.z = deg2rad(EditorTune.trayIdleZRotationDeg3D || 0);
     } else {
-      // Reference shows the lying tray as a wide horizontal plate (same
-      // look in both dump stack and on the rail). The tray model's long
-      // axis is Y=2.01, so we have to ALSO yaw the model 90° around the
-      // vertical so that long axis ends up perpendicular to camera depth
-      // — otherwise the flat plate projects as taller-than-wide (long
-      // axis points into the screen) even though it's truly horizontal.
-      //
-      // Use Euler order 'YXZ' so Y is applied first: yaw the upright
-      // cylinder 90° so its long axis points along world X, THEN tip it
-      // -90° around X to lay it flat. Final pose: long edge runs left-
-      // right in the screen, thin face up to the camera. Matches the
-      // reference's "horizontal disc with horizontal ribs" look.
-      trayGroup.rotation.order = 'YXZ';
-      trayGroup.rotation.y = deg2rad((yDeg || 0) + 90);
-      trayGroup.rotation.x = -deg2rad(90);
+      // Lying-tray branch — leftover from earlier experiments where the
+      // rail tray was a horizontal flat plate. The reference shows
+      // STANDING drums in both states, so this branch is no longer the
+      // primary path; trayLying is aliased to trayUpright after capture
+      // (see below) and the carrier's lying sprite gets the same
+      // vertical-drum texture. We still render this branch in case
+      // some future state needs the true flat-plate bake, but it's not
+      // used in the main dump → launch → rail flow anymore.
+      const tilt = (tiltDeg !== undefined ? tiltDeg : EditorTune.trayTiltDeg) ?? 90;
+      trayGroup.rotation.x = -deg2rad(tilt);
+      trayGroup.rotation.y = deg2rad(yDeg);
       trayGroup.rotation.z = deg2rad(EditorTune.trayIdleZRotationDeg3D || 0);
     }
     // Tray thickness: scale the model's Z axis (the shortest dimension) so
@@ -2476,8 +2477,13 @@ async function boot() {
     Game.tex.bobbinStagesUpright = tex3D.bobbinStagesUpright;
     Game.tex.tray = tex3D.tray;
     Game.tex.trayUpright = tex3D.trayUpright;
-    Game.tex.trayLying = tex3D.trayLying;
-    Game.tex.trayDump = tex3D.trayDump;
+    // Reference shows STANDING trays in both dump and rail states (no
+    // vertical→horizontal pose change during launch). Alias trayLying to
+    // the upright bake so the carrier's lying sprite renders the same
+    // vertical drum — sliding from dump to rail leaves the orientation
+    // unchanged, matching the reference exactly.
+    Game.tex.trayLying = tex3D.trayUpright;
+    Game.tex.trayDump = tex3D.trayUpright;
   } catch (e) {
     console.warn('3D pre-render failed, falling back to procedural', e);
     Game.tex.bobbinStages = null;
@@ -2999,25 +3005,28 @@ function ensureTrayStack() {
 
 function layoutDumpTray(carrier, slotIndex) {
   const s = Layout.bobbinSize * EditorTune.trayIdleScale;
-  // Reference stack: flat horizontal plates stacked vertically, like a
-  // column of pancakes. Each next tray sits directly ABOVE the previous
-  // (no X stagger), offset by `stackSpacing × s` in Y. Base 0.30 ≈ a
-  // third of a tray's screen height, leaving enough of each tray visible
-  // to read as a distinct layer. trayStackSpacing still multiplies on
-  // top for the user's fine-tune (saved 0.56 → ~6.8 px per slot now —
-  // tight stack matching the reference's compact pile).
-  const stackSpacing = 0.30 * (EditorTune.trayStackSpacing ?? 1.0);
-  const off = slotIndex * s * stackSpacing;
+  // Reference: 5 vertical STANDING trays lined up in a ROW (horizontal
+  // arrangement, side by side), not a vertical column. Each next tray
+  // sits to the RIGHT of the previous one, with slight overlap so the
+  // row reads as a compact stack rather than 5 separate objects. Base
+  // multiplier 0.40 ≈ 40% of tray-width per slot, so adjacent trays
+  // overlap by ~60% (matches the reference's tight side-by-side stack).
+  // trayStackSpacing keeps its multiplier role: user's saved 0.56 now
+  // controls how spread out the row is.
+  const rowSpacing = 0.40 * (EditorTune.trayStackSpacing ?? 1.0);
+  const offX = slotIndex * s * rowSpacing;
   carrier.gfx.alpha = 1;
   carrier.gfx.scale.set(1);
-  // No 2D rotation, no X stagger. The trayLaunchedRotationDeg-style 65°
-  // tilt the user had saved was a workaround for the dump-uses-upright
-  // bug; with both states using the 'lying' sprite that look comes from
-  // the 3D tilt baked into the texture, not from a 2D rotation here.
+  // No 2D rotation — the standing-drum look comes entirely from the 3D
+  // bake (trayUpright texture). slotIndex=0 is the FRONTMOST tray (the
+  // one that launches first); higher indices stack behind to the right.
   carrier.gfx.rotation = 0;
-  carrier.gfx.x = 0;
-  carrier.gfx.y = -off;
-  // Both states share the SAME visual orientation — see takeFrontTrayFromDump.
+  carrier.gfx.x = offX;
+  carrier.gfx.y = 0;
+  // Both states (dump + rail) use the same vertical-drum texture. See the
+  // trayLying = trayUpright alias in boot. setOrientation('lying') keeps
+  // the carrier's lying sprite visible — which is the same texture as
+  // upright now.
   carrier.setOrientation?.('lying', true);
 }
 
@@ -3878,12 +3887,12 @@ function returnCarrierToDump(carrier, duration) {
   const sr = carrier.gfx.rotation;
   const returnSlot = Game.trayStack?.length ?? Game.dumpCount;
   const s = Layout.bobbinSize * EditorTune.trayIdleScale;
-  // Must mirror layoutDumpTray exactly: same 0.30 base, no X stagger,
-  // so the returning carrier lands at the next available stack slot.
-  const stackSpacing = 0.30 * (EditorTune.trayStackSpacing ?? 1.0);
-  const off = returnSlot * s * stackSpacing;
-  const tx = Layout.dump.x;
-  const ty = Layout.dump.y - off;
+  // Mirror layoutDumpTray exactly: trays line up in a row along X, no Y
+  // offset. Returning carrier lands at the next open slot in the row.
+  const rowSpacing = 0.40 * (EditorTune.trayStackSpacing ?? 1.0);
+  const off = returnSlot * s * rowSpacing;
+  const tx = Layout.dump.x + off;
+  const ty = Layout.dump.y;
   carrier.gfx.alpha = 1;
   carrier.gfx.scale.set(1);
   if (carrier.upright) carrier.upright.rotation = 0;
