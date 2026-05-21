@@ -783,9 +783,31 @@ let EditorTune = (() => {
  * so the very first frame uses the committed values. File > localStorage so
  * a `git pull` of new shared values always wins over stale per-machine state. */
 async function loadEditorTuneFromFile() {
-  // Baked override (from "스테이지 빌드" export) wins over everything else so
-  // a built stage HTML always renders deterministically, regardless of
-  // localStorage or whether editor_tune.json is reachable.
+  // PRIORITY: localStorage > EDITOR_TUNE_OVERRIDE > editor_tune.json > defaults.
+  //
+  // EDITOR_TUNE_OVERRIDE is the snapshot baked into the HTML by the
+  // "스테이지 빌드" (stage HTML build) export — useful for shipping a
+  // deterministic stage to players who have no localStorage yet. But
+  // for the developer editing the source file, ANY change they save
+  // (which writes to localStorage) must survive a reload. Otherwise
+  // tuning values feels broken — that's what was happening:
+  // localStorage was loaded into EditorTune, but then this function
+  // overwrote everything from the override on the same boot.
+  //
+  // Fix: only apply EDITOR_TUNE_OVERRIDE when localStorage has nothing.
+  // That preserves the "ship deterministic stage" use case (first load
+  // on a fresh device) while letting editing work normally.
+  // If the user already has localStorage saved values, those win — they
+  // represent the developer's most recent edits and must survive a reload.
+  // Otherwise, fall back to: baked override (deterministic stage build) →
+  // editor_tune.json (shared team defaults from repo) → script defaults.
+  const hasLocalStorage = !!localStorage.getItem('wooloop_editor_tune');
+  if (hasLocalStorage) {
+    // Already loaded from localStorage at script eval time (see EditorTune
+    // IIFE init). Don't clobber. The user can press "기본값 복원" to wipe
+    // localStorage if they want the shared values back.
+    return false;
+  }
   if (EDITOR_TUNE_OVERRIDE && typeof EDITOR_TUNE_OVERRIDE === 'object') {
     Object.assign(EditorTune, EDITOR_TUNE_OVERRIDE);
     stripLegacyBobbinShadowTune(EditorTune);
