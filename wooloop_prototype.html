@@ -3081,7 +3081,11 @@ function redrawDump() {
 
 function takeFrontTrayFromDump() {
   ensureTrayStack();
-  const carrier = Game.trayStack.shift();
+  // pop() takes the LAST element (highest slotIndex) — that's the
+  // rightmost tray, which is also at the top of the dump z-order
+  // after the redrawDump iteration was flipped. The user expects the
+  // visually-topmost tray to be the one that launches.
+  const carrier = Game.trayStack.pop();
   if (!carrier) return null;
   const worldX = Layout.dump.x + carrier.gfx.x;
   const worldY = Layout.dump.y + carrier.gfx.y;
@@ -3966,36 +3970,29 @@ function tickInFlight(dt) {
       f.t += dt;
       const u = clamp(f.t / f.duration, 0, 1);
       const sp = f.railStart || RailPath.position(f.landingT ?? 0);
-      // Quadratic Bezier that PASSES THROUGH the via-point at trayU = 0.5,
-      // not just curves toward it. Control = 2*via - 0.5*(start+end).
-      const q = (a, b, c, t) => lerp(lerp(a, b, t), lerp(b, c, t), t);
-      const trayMid = f.trayBoardPos || {
-        x: lerp(f.fromCarrierPos.x, sp.x, 0.45),
-        y: lerp(f.fromCarrierPos.y, sp.y, 0.45),
-      };
-      const ctrlX = 2 * trayMid.x - 0.5 * (f.fromCarrierPos.x + sp.x);
-      const ctrlY = 2 * trayMid.y - 0.5 * (f.fromCarrierPos.y + sp.y);
-      const trayU = phaseEase(u, 0.14, 0.92);
-      f.carrier.gfx.x = q(f.fromCarrierPos.x, ctrlX, sp.x, trayU);
-      f.carrier.gfx.y = q(f.fromCarrierPos.y, ctrlY, sp.y, trayU);
-      const finalTrayRot = sp.angle + deg2rad(EditorTune.trayLaunchedRotationDeg);
-      f.carrier.gfx.rotation = lerpAngle(f.fromCarrierRot ?? 0, finalTrayRot, trayU);
-      // No orientation crossfade: reference shows the tray sliding to the
-      // rail at the SAME angle it had in the dump. It's already in the
-      // 'lying' sprite when taken from the dump (the upright sprite was
-      // a misread of the reference — those vertical drums weren't there).
+      // STRAIGHT slide from the carrier's start position to the rail entry.
+      // The old code did a quadratic Bezier through a via-point offset from
+      // the dump origin, which made the launched tray visibly drift BACKWARD
+      // (toward dump center) before going to the rail — looked broken,
+      // especially after the rightmost-tray-first change because the tray
+      // starts already offset from dump origin. Direct lerp = clean slide.
+      const trayU = phaseEase(u, 0.10, 0.95);
+      f.carrier.gfx.x = lerp(f.fromCarrierPos.x, sp.x, trayU);
+      f.carrier.gfx.y = lerp(f.fromCarrierPos.y, sp.y, trayU);
+      // Rotation stays constant — the tray slides at the SAME angle it had
+      // in the dump. User explicitly asked for no rotation during launch.
+      f.carrier.gfx.rotation = f.fromCarrierRot ?? 0;
 
       if (!f.bobbinLaid && u > 0.48) {
         f.bobbinLaid = true;
         if (f.bobbin.setOrientation) f.bobbin.setOrientation('lying');
       }
+      // Bobbin: straight slide from queue position to landing point on top
+      // of the tray. Bobbin offset above the tray center stays as configured.
       const bobbinU = phaseEase(u, 0.05, 0.95);
-      const bxMid = Math.min(f.bobbinFrom.x, sp.x) - Layout.bobbinSize * 0.22;
-      const byMid = lerp(f.bobbinFrom.y, sp.y, 0.54) + Layout.bobbinSize * 0.10;
-      // Bobbin lands on top of the tray (negative Y = above in screen space).
       const onTopY = (EditorTune.bobbinOnTrayOffsetY || 0);
-      f.bobbin.gfx.x = q(f.bobbinFrom.x, bxMid, sp.x, bobbinU);
-      f.bobbin.gfx.y = q(f.bobbinFrom.y, byMid, sp.y + onTopY, bobbinU);
+      f.bobbin.gfx.x = lerp(f.bobbinFrom.x, sp.x, bobbinU);
+      f.bobbin.gfx.y = lerp(f.bobbinFrom.y, sp.y + onTopY, bobbinU);
       const bobbinRot = lerp(0, sp.angle + deg2rad(EditorTune.bobbinRailRotationDeg), phaseEase(u, 0.48, 0.95));
       f.bobbin.gfx.rotation = bobbinRot;
       if (f.bobbin.badgeGroup) f.bobbin.badgeGroup.rotation = -bobbinRot;
