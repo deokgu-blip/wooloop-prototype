@@ -1835,8 +1835,13 @@ function createReferenceTrayPlate() {
   // graphic when the texture isn't loaded yet.
   // Sized to Layout.bobbinSize — the caller (Carrier.updateVisualStyle)
   // multiplies by EditorTune.trayIdleScale via container.scale.
+  //
+  // Prefer trayUpright (vertical-cylinder bake) — that's what the dump
+  // stack shows in the reference. trayDump is just an alias for trayUpright
+  // now (was previously aliased to trayLying, which made the stack look
+  // like flat horizontal plates and required a hack rotation).
   const node = new PIXI.Container();
-  const tex = Game.tex?.trayDump || Game.tex?.trayLying || Game.tex?.trayUpright || Game.tex?.tray;
+  const tex = Game.tex?.trayUpright || Game.tex?.trayDump || Game.tex?.trayLying || Game.tex?.tray;
   if (tex) {
     const sp = new PIXI.Sprite(tex);
     sp.anchor.set(0.5);
@@ -1903,7 +1908,10 @@ class Carrier {
   constructor(orientation = 'upright') {
     this.gfx = new PIXI.Container();
     this.orientation = orientation;
-    const texU = Game.tex?.trayDump || Game.tex?.trayLying || Game.tex?.trayUpright || Game.tex?.tray;
+    // Upright = vertical cylinder (dump stack). Lying = horizontal plate
+    // (in flight + on rail). The Carrier owns BOTH sprites and crossfades
+    // between them — no sprite is ever destroyed.
+    const texU = Game.tex?.trayUpright || Game.tex?.trayDump || Game.tex?.trayLying || Game.tex?.tray;
     const texL = Game.tex?.trayLying || Game.tex?.tray;
     if (texU || texL) {
       this.upright = createReferenceTrayPlate();
@@ -2400,12 +2408,12 @@ async function preRender3DAssets() {
   };
   const trayLying   = await renderTrayAt(EditorTune.trayYRotationDeg || 0, EditorTune.trayTiltDeg, 'lying');
   const trayUpright = await renderTrayAt(EditorTune.trayIdleYRotationDeg || 0, 0, 'upright');
-  // Dump trays should start in the same physical pose they launch from.
-  // The earlier version baked a vertical "upright" tray, then rotated that
-  // sprite in 2D, which made the stack look edge-on and caused a pop when the
-  // front tray started moving. Use the rail/lying texture for the dump stack
-  // as the reference does: one real tray, already in its sliding pose.
-  const trayDump = trayLying;
+  // Reverted earlier hack — reference shows the stacked trays as VERTICAL
+  // cylinders (drum-on-end). They lie down WHILE sliding to the rail, not
+  // before. Use the upright texture for the dump stack, then crossfade to
+  // the lying texture during the launch animation. The same Carrier
+  // instance carries both child sprites so no creation/destruction occurs.
+  const trayDump = trayUpright;
   const trayTex = trayLying;
 
   // Keep the Three.js renderer/scene alive globally so we can re-render
@@ -2985,11 +2993,24 @@ function ensureTrayStack() {
 
 function layoutDumpTray(carrier, slotIndex) {
   const s = Layout.bobbinSize * EditorTune.trayIdleScale;
-  const stackSpacing = 0.18 * (EditorTune.trayStackSpacing ?? 1.0);
+  // Base multiplier 0.55 is calibrated for VERTICAL CYLINDER stacking
+  // (each tray offset by ~half a cylinder height per slot, like coins).
+  // The previous 0.18 was tuned for horizontal-plate stacking where
+  // trays overlap tightly — under that base, the user-saved
+  // trayStackSpacing of 0.56 gave only ~4px between trays, so all five
+  // looked like one. trayStackSpacing remains a multiplier on top, so
+  // values <1 still tighten the stack and >1 spread it further.
+  const stackSpacing = 0.55 * (EditorTune.trayStackSpacing ?? 1.0);
   const off = slotIndex * s * stackSpacing;
   carrier.gfx.alpha = 1;
   carrier.gfx.scale.set(1);
-  carrier.gfx.rotation = deg2rad(EditorTune.trayDumpRotationDeg || 0);
+  // Stack trays render as pure UPRIGHT vertical cylinders (matches the
+  // reference). trayDumpRotationDeg is intentionally ignored here — the
+  // old code multiplied it onto each tray to tilt the stack, which was a
+  // workaround for the dump using the lying texture (now using upright).
+  // The slight diagonal stagger (-off*0.15, -off) is kept for the
+  // "isometric stack" depth cue from the reference.
+  carrier.gfx.rotation = 0;
   carrier.gfx.x = -off * 0.15;
   carrier.gfx.y = -off;
   carrier.setOrientation?.('upright', true);
@@ -3020,7 +3041,11 @@ function takeFrontTrayFromDump() {
   carrier.gfx.y = worldY;
   carrier.gfx.alpha = 1;
   carrier.gfx.scale.set(1);
-  carrier.setOrientation?.('lying', true);
+  // Leave the carrier UPRIGHT — the launch animation in tickInFlight calls
+  // applyFade('upright','lying',u) so the tray gradually lays down as it
+  // slides to the rail. Doing setOrientation('lying', true) here caused
+  // the instant "vertical→horizontal pop" the user reported.
+  carrier.setOrientation?.('upright', true);
   return carrier;
 }
 
@@ -3845,7 +3870,9 @@ function returnCarrierToDump(carrier, duration) {
   const sr = carrier.gfx.rotation;
   const returnSlot = Game.trayStack?.length ?? Game.dumpCount;
   const s = Layout.bobbinSize * EditorTune.trayIdleScale;
-  const stackSpacing = 0.18 * (EditorTune.trayStackSpacing ?? 1.0);
+  // Must use the SAME 0.55 base as layoutDumpTray so the returning carrier
+  // lands exactly on the next slot in the vertical-cylinder stack.
+  const stackSpacing = 0.55 * (EditorTune.trayStackSpacing ?? 1.0);
   const off = returnSlot * s * stackSpacing;
   const tx = Layout.dump.x - off * 0.15;
   const ty = Layout.dump.y - off;
@@ -3857,7 +3884,10 @@ function returnCarrierToDump(carrier, duration) {
     x: Layout.dump.x + Layout.bobbinSize * 0.22,
     y: Math.min(sy, Layout.dump.y + Layout.bobbinSize * 0.52),
   };
-  const settleRot = deg2rad(EditorTune.trayDumpRotationDeg || 0);
+  // Stack trays sit at rotation 0 (pure upright cylinder) — see layoutDumpTray.
+  // The return animation lands the carrier at 0 so the crossfade to the
+  // upright sprite reads as the tray standing back up into the stack.
+  const settleRot = 0;
   addAnim(duration, (eu, u) => {
     const travelU = phaseEase(u, 0.02, 0.86);
     carrier.gfx.x = q(sx, mid.x, tx, travelU);
@@ -3894,6 +3924,13 @@ function tickInFlight(dt) {
       f.carrier.gfx.y = q(f.fromCarrierPos.y, ctrlY, sp.y, trayU);
       const finalTrayRot = sp.angle + deg2rad(EditorTune.trayLaunchedRotationDeg);
       f.carrier.gfx.rotation = lerpAngle(f.fromCarrierRot ?? 0, finalTrayRot, trayU);
+      // Smoothly lay the tray down as it slides — same Carrier instance
+      // crossfades from the vertical-cylinder sprite to the horizontal-
+      // plate sprite. Skipping this caused an instant pop earlier; doing
+      // it in tickInFlight keeps the rotation visual continuous.
+      if (f.carrier.applyFade) {
+        f.carrier.applyFade('upright', 'lying', phaseEase(u, 0.18, 0.78));
+      }
 
       if (!f.bobbinLaid && u > 0.48) {
         f.bobbinLaid = true;
