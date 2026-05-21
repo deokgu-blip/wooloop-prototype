@@ -3067,8 +3067,12 @@ function redrawDump() {
   c.removeChildren();
   if (!EditorTune.trayDumpVisible) return;
   ensureTrayStack();
-  // Draw back → front so the front tray remains visually on top.
-  for (let i = Game.trayStack.length - 1; i >= 0; i--) {
+  // Draw front → back so the LAST tray in the stack (rightmost, with
+  // the largest X offset) ends up on top of the z-order. User asked for
+  // "오른쪽 트레이가 위에 보이게" — under the isometric layout where
+  // higher slotIndex sits to the right, that means draw with ascending
+  // index so addChild appends each next one on top.
+  for (let i = 0; i < Game.trayStack.length; i++) {
     const carrier = Game.trayStack[i];
     layoutDumpTray(carrier, i);
     c.addChild(carrier.gfx);
