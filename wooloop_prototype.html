@@ -3030,11 +3030,11 @@ function layoutDumpTray(carrier, slotIndex) {
   const off = slotIndex * s * isoSpacing;
   carrier.gfx.alpha = 1;
   carrier.gfx.scale.set(1);
-  // No 2D rotation — the standing-drum look comes entirely from the 3D
-  // bake (trayUpright texture). slotIndex=0 is the FRONTMOST tray;
-  // higher slotIndex = further back in the pile (drawn earlier in
-  // redrawDump so it sits visually behind).
-  carrier.gfx.rotation = 0;
+  // Per-tray Z rotation. Each tray spins around its own center by the
+  // SAME angle (all 5 trays share the value via the shared key). This
+  // is separate from trayStackRotationDeg (whole-pile turntable spin,
+  // applied to Game.dumpGfx). Together they give independent control.
+  carrier.gfx.rotation = deg2rad(EditorTune.trayDumpRotationDeg || 0);
   carrier.gfx.x = off * 0.35;  // slight rightward drift per back tray
   carrier.gfx.y = -off;        // up (back tray peeks above front)
   carrier.setOrientation?.('lying', true);
@@ -5087,8 +5087,23 @@ function buildEditorAssetRegistry() {
     {
       id: 'trayIdle', name: '트레이 (대기)', is3D: true,
       bounds: () => {
-        const size = Math.max(40, Layout.bobbinSize * (EditorTune.trayIdleScale || 1) * 1.3);
-        return { x: Layout.dump.x - size/2, y: Layout.dump.y - size/2, w: size, h: size };
+        // Gizmo size: large enough to grab easily, small enough to fit
+        // inside the canvas after clamping the center. rotRingGeom uses
+        // min(b.w, b.h) * 0.72 for the radius, so a 140 box → 100 px
+        // ring. We clamp the center so the full gizmo stays on-screen
+        // (works even with the user's saved dump position at the
+        // left edge).
+        const W = Layout.W || 800;
+        const H = Layout.H || 800;
+        // Cap size at ~85% of the narrowest screen dimension so the
+        // gizmo always fits.
+        const target = Math.max(140, Layout.bobbinSize * (EditorTune.trayIdleScale || 1) * 1.5);
+        const size = Math.min(target, Math.min(W, H) * 0.85);
+        const ringR = Math.max(60, size * 0.72);
+        const margin = ringR + 6;
+        let cx = Math.max(margin, Math.min(W - margin, Layout.dump.x));
+        let cy = Math.max(margin, Math.min(H - margin, Layout.dump.y));
+        return { x: cx - size/2, y: cy - size/2, w: size, h: size };
       },
       bindings: {
         pos:   { xKey: 'dumpX', yKey: 'dumpY',
