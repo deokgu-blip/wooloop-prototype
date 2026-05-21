@@ -862,7 +862,10 @@ const COLOR = {
   counterBg:    0x26364a,
 };
 
-const WOOL = {
+// Default palette used by the built-in chicken pattern + any time the
+// user hasn't pasted a custom image yet. Kept as a frozen baseline so we
+// can always reset back to it via the map editor's "현재 패턴 불러오기".
+const BASE_WOOL = {
   // Core 5 (original game palette).
   blue:   { fill: 0x1f70e6, light: 0x66a7ff, dark: 0x0c48b2 },
   red:    { fill: 0xef3a34, light: 0xff7a70, dark: 0xa51f20 },
@@ -882,6 +885,38 @@ const WOOL = {
   brown:    { fill: 0x8b5a2b, light: 0xc18a5a, dark: 0x5a3818 },
   gray:     { fill: 0x808080, light: 0xb0b0b0, dark: 0x505050 },
 };
+
+// LIVE palette (mutable). Starts as a copy of BASE_WOOL and gets
+// replaced with the dynamic ~50-color palette extracted from a pasted
+// image. All wool-color lookups everywhere go through this object so
+// changing it propagates to bobbins, grid cells, the editor palette
+// UI, the bobbin deck generator, and the quantizer.
+let WOOL = { ...BASE_WOOL };
+
+// Build a fill/light/dark trio from a single fill RGB. Used when we
+// add dynamic colors to WOOL — light/dark are computed from luminance
+// shifts so bobbin highlights/shadows still look reasonable.
+function deriveWoolEntry(rgbFill) {
+  const r = (rgbFill >> 16) & 0xff, g = (rgbFill >> 8) & 0xff, b = rgbFill & 0xff;
+  const shade = (delta) => {
+    const sr = Math.max(0, Math.min(255, r + delta));
+    const sg = Math.max(0, Math.min(255, g + delta));
+    const sb = Math.max(0, Math.min(255, b + delta));
+    return (sr << 16) | (sg << 8) | sb;
+  };
+  return { fill: rgbFill, light: shade(+60), dark: shade(-70) };
+}
+
+// Replace WOOL with a fresh palette. `entries` is { key: rgbFill } or
+// { key: { fill, light, dark } }. Drops the old palette entirely.
+function setActivePalette(entries) {
+  const next = {};
+  for (const [key, val] of Object.entries(entries)) {
+    if (typeof val === 'number') next[key] = deriveWoolEntry(val);
+    else if (val && typeof val.fill === 'number') next[key] = { fill: val.fill, light: val.light, dark: val.dark };
+  }
+  WOOL = next;
+}
 
 const QUEUE_VISIBLE_MAX = 6;
 const BOBBIN_MAX_COUNT = 40;
@@ -1118,6 +1153,14 @@ function _loadSessionPattern() {
   return null;
 }
 let PATTERN = PATTERN_OVERRIDE || _loadSessionPattern() || createChickenPattern();
+// If the session pattern shipped a custom palette (saved when the user
+// pasted an image and hit 테스트), install it BEFORE the bobbin deck is
+// built so the deck spawns bobbins of those colors. Without this, after
+// a reload WOOL is still BASE_WOOL and the pasted cells (which have
+// keys like 'c0', 'c1'...) wouldn't have matching bobbins.
+if (PATTERN && PATTERN.palette && typeof PATTERN.palette === 'object') {
+  setActivePalette(PATTERN.palette);
+}
 let INITIAL_BOBBINS = createBobbinDeck(PATTERN.cells);
 
 /* --- Helpers --- */
@@ -5470,6 +5513,25 @@ const MapTool = {
       ctx.drawImage(img, dx, dy, dw, dh);
 
       const data = ctx.getImageData(0, 0, cols, rows).data;
+
+      // --- Dynamic palette extraction (user request: no fixed-color limit).
+      // Pull the top ~50 dominant colors from THIS image and use them as
+      // the new WOOL palette. Cells quantize to nearest in the dynamic
+      // palette; bobbins later spawn with these same colors.
+      const PALETTE_SIZE = 50;
+      const dynPalette = extractPaletteFromImagePixels(data, PALETTE_SIZE);
+      const paletteCount = Object.keys(dynPalette).length;
+      if (paletteCount > 0) {
+        setActivePalette(dynPalette);
+      } else {
+        // Image was fully transparent — fall back to the base palette so
+        // the editor doesn't end up with an empty WOOL.
+        setActivePalette(BASE_WOOL);
+      }
+      // Rebuild the palette swatch row in the editor UI so the user sees
+      // the actual extracted colors.
+      if (typeof this._buildPalette === 'function') this._buildPalette();
+
       for (let r = 0; r < rows; r++) {
         for (let c = 0; c < cols; c++) {
           const i = (r * cols + c) * 4;
@@ -5481,7 +5543,7 @@ const MapTool = {
       this.render();
       this.updateBobbinPreview();
       const nativeStr = (img.width === cols && img.height === rows) ? ' (원본 해상도)' : ` (${img.width}×${img.height} → ${cols}×${rows})`;
-      flashEditorMessage(`이미지 적용 ✓${nativeStr}`);
+      flashEditorMessage(`이미지 적용 ✓${nativeStr} · 팔레트 ${paletteCount}색`);
     } finally {
       URL.revokeObjectURL(url);
     }
@@ -5616,6 +5678,10 @@ const MapTool = {
     let nonEmpty = 0;
     for (const r of pattern.cells) for (const c of r) if (c) nonEmpty++;
     if (!nonEmpty) { flashEditorMessage('빈 그리드는 테스트할 수 없습니다'); return; }
+    // Attach the LIVE WOOL palette so the dynamic colors extracted from
+    // the pasted image survive the reload — bobbins need them to render.
+    pattern.palette = {};
+    for (const [k, v] of Object.entries(WOOL)) pattern.palette[k] = v.fill;
     try {
       sessionStorage.setItem('wooloop_test_pattern', JSON.stringify(pattern));
     } catch (err) {
@@ -5670,6 +5736,46 @@ function quantizeToWool(r, g, b) {
     if (d < bestDist) { bestDist = d; best = key; }
   }
   return best;
+}
+
+// Extract a dynamic palette (~N dominant colors) from RGBA pixel data.
+// Strategy: bucket pixels into a coarse RGB grid (16 levels per channel
+// → max 4096 buckets), count frequencies, take the top N, and use the
+// average RGB inside each top bucket as the representative color.
+// Returns { key: rgbFill } where keys are 'c0', 'c1', ... in frequency
+// order. Caller passes this to setActivePalette() to install it.
+function extractPaletteFromImagePixels(pixels, targetCount = 50) {
+  const QUANT = 16;                   // 16 levels per channel = 4096 buckets max
+  const buckets = new Map();          // key → { sumR, sumG, sumB, count }
+  for (let i = 0; i < pixels.length; i += 4) {
+    if (pixels[i + 3] < 64) continue; // skip transparent
+    const r = pixels[i], g = pixels[i + 1], b = pixels[i + 2];
+    const qr = Math.round(r / QUANT) * QUANT;
+    const qg = Math.round(g / QUANT) * QUANT;
+    const qb = Math.round(b / QUANT) * QUANT;
+    const key = (qr << 16) | (qg << 8) | qb;
+    let bucket = buckets.get(key);
+    if (!bucket) {
+      bucket = { sumR: 0, sumG: 0, sumB: 0, count: 0 };
+      buckets.set(key, bucket);
+    }
+    bucket.sumR += r; bucket.sumG += g; bucket.sumB += b; bucket.count++;
+  }
+  const sorted = [...buckets.values()]
+    .map(b => ({
+      r: Math.round(b.sumR / b.count),
+      g: Math.round(b.sumG / b.count),
+      b: Math.round(b.sumB / b.count),
+      count: b.count,
+    }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, targetCount);
+  const palette = {};
+  for (let i = 0; i < sorted.length; i++) {
+    const { r, g, b } = sorted[i];
+    palette['c' + i] = (Math.min(255, r) << 16) | (Math.min(255, g) << 8) | Math.min(255, b);
+  }
+  return palette;
 }
 
 /* =========================================================================
