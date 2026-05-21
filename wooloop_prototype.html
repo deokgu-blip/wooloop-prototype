@@ -841,6 +841,34 @@ async function loadEditorTuneFromFile() {
 
 const deg2rad = (d) => d * Math.PI / 180;
 
+/* --- Tray rotation baseline -----------------------------------------------
+ * The 3D model + camera setup produces a tray that looks LYING FLAT at all-
+ * zero rotation. To get a reference-matching standing drum the user had to
+ * dial in compensating rotation values (~65° dump 2D Z, ~58° 3D X, etc.).
+ * Those compensations are now baked in here as constants, so the user's
+ * editor knobs read 0 = "reference look", positive = "more tilt on top of
+ * baseline", negative = "less tilt".  Rail tray uses the same baseline so
+ * it visually matches the dump pile.
+ * -------------------------------------------------------------------------- */
+const TRAY_ROT_BASELINE = {
+  // 2D PIXI rotation applied to each carrier.gfx in the dump pile.
+  dumpZ:        65,
+  // 2D PIXI rotation applied to the rail carrier.gfx (replaces the old
+  // pos.angle + value formula so the on-rail tray stays at this fixed
+  // orientation as it travels around the loop).
+  railZ:        65,
+  // 3D model rotations baked into the upright texture render
+  // (renderTrayAt 'upright' branch).
+  bakedX:       58.375781249999996,
+  bakedY:       8.519531249999995,
+  bakedZ3D:     0.5,
+};
+const trayBakedRotX  = () => deg2rad(TRAY_ROT_BASELINE.bakedX  + (EditorTune.trayIdleXRotationDeg   || 0));
+const trayBakedRotY  = (yDeg) => deg2rad(TRAY_ROT_BASELINE.bakedY  + (yDeg || 0));
+const trayBakedRotZ3D= () => deg2rad(TRAY_ROT_BASELINE.bakedZ3D + (EditorTune.trayIdleZRotationDeg3D|| 0));
+const trayDumpRot2D  = () => deg2rad(TRAY_ROT_BASELINE.dumpZ    + (EditorTune.trayDumpRotationDeg   || 0));
+const trayRailRot2D  = () => deg2rad(TRAY_ROT_BASELINE.railZ    + (EditorTune.trayLaunchedRotationDeg || 0));
+
 /* --- Palette --- */
 const COLOR = {
   bg:           0x62bfdb,
@@ -2403,14 +2431,14 @@ async function preRender3DAssets() {
     clearAddedMeshes();
     const trayGroup = new THREE.Group();
     if (orientation === 'upright') {
-      // Individual-tray 3D rotation: all three axes apply, all three
-      // are tunable from the editor. Bakes into the texture so all 5
-      // trays share the same pose (each tray rotates around its own
-      // center). Stack-wide rotation is a separate knob applied to
-      // the dump CONTAINER (see EditorTune.trayStackRotationDeg).
-      trayGroup.rotation.x = deg2rad(EditorTune.trayIdleXRotationDeg || 0);
-      trayGroup.rotation.y = deg2rad(yDeg || 0);
-      trayGroup.rotation.z = deg2rad(EditorTune.trayIdleZRotationDeg3D || 0);
+      // Individual-tray 3D rotation. BASELINE (TRAY_ROT_BASELINE.*) is
+      // pre-applied so the user's editor knobs read 0 = reference look.
+      // Editing the knob adds/subtracts on top of the baseline.
+      // Stack-wide rotation is a separate knob applied to the dump
+      // CONTAINER (see EditorTune.trayStackRotationDeg).
+      trayGroup.rotation.x = trayBakedRotX();
+      trayGroup.rotation.y = trayBakedRotY(yDeg);
+      trayGroup.rotation.z = trayBakedRotZ3D();
     } else {
       // Lying-tray branch — leftover from earlier experiments where the
       // rail tray was a horizontal flat plate. The reference shows
@@ -3052,11 +3080,10 @@ function layoutDumpTray(carrier, slotIndex) {
   const off = slotIndex * s * isoSpacing;
   carrier.gfx.alpha = 1;
   carrier.gfx.scale.set(1);
-  // Per-tray Z rotation. Each tray spins around its own center by the
-  // SAME angle (all 5 trays share the value via the shared key). This
-  // is separate from trayStackRotationDeg (whole-pile turntable spin,
-  // applied to Game.dumpGfx). Together they give independent control.
-  carrier.gfx.rotation = deg2rad(EditorTune.trayDumpRotationDeg || 0);
+  // Per-tray 2D Z rotation. Baseline (TRAY_ROT_BASELINE.dumpZ ≈ 65°) is
+  // pre-applied so the standing-drum look comes out at value=0. User's
+  // trayDumpRotationDeg knob adds/subtracts on top.
+  carrier.gfx.rotation = trayDumpRot2D();
   carrier.gfx.x = off * 0.35;  // slight rightward drift per back tray
   carrier.gfx.y = -off;        // up (back tray peeks above front)
   carrier.setOrientation?.('lying', true);
@@ -3503,14 +3530,14 @@ function tickRail(dt) {
     const pos = RailPath.position(e.t);
     e.carrier.gfx.x = pos.x;
     e.carrier.gfx.y = pos.y;
-    // trayLaunchedRotationDeg is ALWAYS applied as a 2D screen-space rotation
-    // of the carrier sprite — it's how the user controls "which direction
-    // does the tray face on the rail" (e.g. 0 = long edge follows the rail,
-    // 90 = long edge perpendicular to the rail). trayRailFlat now only
-    // governs the 3D X-axis tilt baked into the texture; it doesn't lock
-    // the screen rotation. Previously the flat mode silenced this knob,
-    // which left the user with no rotation control at all.
-    e.carrier.gfx.rotation = pos.angle + deg2rad(EditorTune.trayLaunchedRotationDeg);
+    // Rail tray rotation: FIXED at the baseline (so it matches the dump
+    // tray visually as it travels around). Previously this was
+    // `pos.angle + trayLaunchedRotationDeg`, which made the tray spin
+    // with the rail tangent — confusing because the tray's orientation
+    // would change between rail bottom and rail right side. The
+    // reference shows the tray at a consistent angle on the rail, so
+    // we drop the pos.angle term and use the baseline + user knob only.
+    e.carrier.gfx.rotation = trayRailRot2D();
     e.bobbin.gfx.x = pos.x;
     e.bobbin.gfx.y = pos.y + (EditorTune.bobbinOnTrayOffsetY || 0);
     // Bobbin follows the carrier direction (+ optional tuneable offset)
@@ -3941,14 +3968,10 @@ function returnCarrierToDump(carrier, duration) {
     x: Layout.dump.x + Layout.bobbinSize * 0.22,
     y: Math.min(sy, Layout.dump.y + Layout.bobbinSize * 0.52),
   };
-  // Stack and rail share the same 'lying' sprite — no orientation change
-  // is needed on return. Just translate back to the next stack slot
-  // (above the bobbin's slot landing position) and settle the rotation
-  // back to 0. The applyFade('lying','upright',...) call that used to
-  // live here was leftover from the misread of the reference where I
-  // thought stack trays were vertical cylinders; reference shows they
-  // are flat plates in both states, so no crossfade is needed.
-  const settleRot = 0;
+  // Returning carrier settles at the dump baseline rotation (matches
+  // layoutDumpTray) so the visual is continuous as it slides back into
+  // the pile.
+  const settleRot = trayDumpRot2D();
   addAnim(duration, (eu, u) => {
     const travelU = phaseEase(u, 0.02, 0.86);
     carrier.gfx.x = q(sx, mid.x, tx, travelU);
@@ -3971,17 +3994,19 @@ function tickInFlight(dt) {
       const u = clamp(f.t / f.duration, 0, 1);
       const sp = f.railStart || RailPath.position(f.landingT ?? 0);
       // STRAIGHT slide from the carrier's start position to the rail entry.
-      // The old code did a quadratic Bezier through a via-point offset from
-      // the dump origin, which made the launched tray visibly drift BACKWARD
-      // (toward dump center) before going to the rail — looked broken,
-      // especially after the rightmost-tray-first change because the tray
-      // starts already offset from dump origin. Direct lerp = clean slide.
+      // Position is a direct lerp (no Bezier, no via-point).
       const trayU = phaseEase(u, 0.10, 0.95);
       f.carrier.gfx.x = lerp(f.fromCarrierPos.x, sp.x, trayU);
       f.carrier.gfx.y = lerp(f.fromCarrierPos.y, sp.y, trayU);
-      // Rotation stays constant — the tray slides at the SAME angle it had
-      // in the dump. User explicitly asked for no rotation during launch.
-      f.carrier.gfx.rotation = f.fromCarrierRot ?? 0;
+      // Rotation: interpolate from dump baseline to rail baseline.
+      // Both baselines are tuned to look identical at value=0, so
+      // the visual stays continuous through the slide — no mid-flight
+      // angle pop.
+      f.carrier.gfx.rotation = lerpAngle(
+        f.fromCarrierRot ?? trayDumpRot2D(),
+        trayRailRot2D(),
+        trayU,
+      );
 
       if (!f.bobbinLaid && u > 0.48) {
         f.bobbinLaid = true;
