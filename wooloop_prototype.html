@@ -372,7 +372,20 @@
       <fieldset>
         <legend>팔레트</legend>
         <div id="map-palette"></div>
-        <div style="font-size:10.5px; color:#889; margin-top:4px">좌클릭=칠하기 · 우클릭=지우기</div>
+        <div style="font-size:10.5px; color:#889; margin-top:4px">
+          좌클릭=칠하기 · 우클릭=지우기 · <b>편집 모드</b>에서는 다중 선택해서 통합/삭제
+        </div>
+        <div id="map-palette-actions" style="margin-top:6px; display:flex; flex-wrap:wrap; gap:6px; align-items:center;">
+          <button id="map-palette-edit-toggle" class="secondary" style="font-size:11px; padding:4px 8px;">편집 모드 OFF</button>
+          <span id="map-palette-selcount" style="font-size:11px; color:#aab; display:none;">0개 선택</span>
+          <button id="map-palette-merge" class="secondary" style="font-size:11px; padding:4px 8px; display:none;">대표색으로 통합</button>
+          <button id="map-palette-delete" class="secondary" style="font-size:11px; padding:4px 8px; display:none; background:#7a3434; color:#fff;">삭제</button>
+        </div>
+        <div id="map-palette-rep-picker" style="margin-top:6px; display:none; padding:6px; background:#0f1620; border:1px solid #3a4a5a; border-radius:6px;">
+          <div style="font-size:11px; color:#bcd; margin-bottom:4px;">대표색으로 사용할 색을 클릭:</div>
+          <div id="map-palette-rep-options" style="display:flex; flex-wrap:wrap; gap:4px;"></div>
+          <button id="map-palette-rep-cancel" class="secondary" style="margin-top:4px; font-size:10px; padding:2px 6px;">취소</button>
+        </div>
       </fieldset>
 
       <canvas id="map-canvas" width="260" height="260"></canvas>
@@ -5336,6 +5349,13 @@ const MapTool = {
   _buildPalette() {
     const wrap = document.getElementById('map-palette');
     if (!wrap) return;
+    // Persistent palette-edit state across rebuilds.
+    if (!this.actionSelectedKeys) this.actionSelectedKeys = new Set();
+    if (this.editMode === undefined) this.editMode = false;
+    // Drop any selected keys that no longer exist in WOOL (e.g. after delete/merge).
+    for (const k of [...this.actionSelectedKeys]) {
+      if (!(k in WOOL)) this.actionSelectedKeys.delete(k);
+    }
     wrap.innerHTML = '';
     // Eraser button first
     const eraseBtn = document.createElement('button');
@@ -5350,17 +5370,161 @@ const MapTool = {
       b.dataset.color = key;
       const hex = '#' + def.fill.toString(16).padStart(6, '0');
       b.innerHTML = `<span class="swatch" style="background:${hex}"></span>`;
+      if (this.actionSelectedKeys.has(key)) b.classList.add('selected');
+      // Visual hint when in edit mode
+      if (this.editMode) b.style.boxShadow = 'inset 0 0 0 1px #ffd54a';
+      else b.style.boxShadow = '';
       wrap.appendChild(b);
     }
-    wrap.addEventListener('click', (e) => {
+    // (Re-)wire the click handler once. Detach prior to avoid stacking.
+    if (this._paletteClick) wrap.removeEventListener('click', this._paletteClick);
+    this._paletteClick = (e) => {
       const btn = e.target.closest('button');
       if (!btn) return;
-      this.selectedColor = btn.dataset.color || null;  // empty → eraser
-      wrap.querySelectorAll('button').forEach(b => b.classList.remove('selected'));
-      btn.classList.add('selected');
-    });
-    // Default selection
-    wrap.querySelector(`button[data-color="${this.selectedColor}"]`)?.classList.add('selected');
+      const key = btn.dataset.color;
+      if (this.editMode && key) {
+        // Toggle membership in actionSelectedKeys; don't change paint color.
+        if (this.actionSelectedKeys.has(key)) this.actionSelectedKeys.delete(key);
+        else this.actionSelectedKeys.add(key);
+        btn.classList.toggle('selected');
+      } else {
+        // Regular: set paint color, exclusive selection highlight.
+        this.selectedColor = key || null;
+        wrap.querySelectorAll('button').forEach(b => b.classList.remove('selected'));
+        btn.classList.add('selected');
+      }
+      this._refreshPaletteActionBar();
+    };
+    wrap.addEventListener('click', this._paletteClick);
+    // Restore paint-color selection (only relevant when not in edit mode)
+    if (!this.editMode) {
+      wrap.querySelector(`button[data-color="${this.selectedColor}"]`)?.classList.add('selected');
+    }
+    // Wire (or rewire) the action-bar buttons. Doing it here ensures they
+    // also work after _buildPalette is called from applyImage.
+    this._wirePaletteActions();
+    this._refreshPaletteActionBar();
+  },
+
+  _wirePaletteActions() {
+    const toggle = document.getElementById('map-palette-edit-toggle');
+    const merge  = document.getElementById('map-palette-merge');
+    const del    = document.getElementById('map-palette-delete');
+    const cancel = document.getElementById('map-palette-rep-cancel');
+    if (toggle && !toggle._wired) {
+      toggle._wired = true;
+      toggle.addEventListener('click', () => {
+        this.editMode = !this.editMode;
+        if (!this.editMode) this.actionSelectedKeys?.clear();
+        this._buildPalette();
+      });
+    }
+    if (merge && !merge._wired) {
+      merge._wired = true;
+      merge.addEventListener('click', () => this._showRepPicker());
+    }
+    if (del && !del._wired) {
+      del._wired = true;
+      del.addEventListener('click', () => this._deleteSelectedPaletteColors());
+    }
+    if (cancel && !cancel._wired) {
+      cancel._wired = true;
+      cancel.addEventListener('click', () => {
+        document.getElementById('map-palette-rep-picker').style.display = 'none';
+      });
+    }
+  },
+
+  _refreshPaletteActionBar() {
+    const toggle = document.getElementById('map-palette-edit-toggle');
+    const count  = document.getElementById('map-palette-selcount');
+    const merge  = document.getElementById('map-palette-merge');
+    const del    = document.getElementById('map-palette-delete');
+    if (!toggle) return;
+    toggle.textContent = '편집 모드 ' + (this.editMode ? 'ON' : 'OFF');
+    toggle.style.background = this.editMode ? '#345a78' : '';
+    const n = this.actionSelectedKeys?.size ?? 0;
+    if (this.editMode && n > 0) {
+      count.style.display = '';
+      count.textContent = `${n}개 선택`;
+      merge.style.display = (n >= 2) ? '' : 'none';
+      del.style.display   = (n >= 1) ? '' : 'none';
+    } else {
+      count.style.display = 'none';
+      merge.style.display = 'none';
+      del.style.display   = 'none';
+    }
+  },
+
+  _showRepPicker() {
+    const picker = document.getElementById('map-palette-rep-picker');
+    const opts   = document.getElementById('map-palette-rep-options');
+    if (!picker || !opts) return;
+    opts.innerHTML = '';
+    for (const key of this.actionSelectedKeys) {
+      if (!(key in WOOL)) continue;
+      const btn = document.createElement('button');
+      btn.style.cssText = 'width:36px;height:36px;border-radius:6px;border:1px solid #3a4a5a;cursor:pointer;padding:0;';
+      btn.style.background = '#' + WOOL[key].fill.toString(16).padStart(6, '0');
+      btn.title = '대표색으로: ' + key;
+      btn.addEventListener('click', () => {
+        this._mergeSelectedPaletteColorsTo(key);
+        picker.style.display = 'none';
+      });
+      opts.appendChild(btn);
+    }
+    picker.style.display = '';
+  },
+
+  _mergeSelectedPaletteColorsTo(repKey) {
+    if (!this.actionSelectedKeys || this.actionSelectedKeys.size < 2) return;
+    const dropKeys = [...this.actionSelectedKeys].filter(k => k !== repKey && k in WOOL);
+    // Remap cells from drop keys → rep key
+    for (let r = 0; r < this.rows; r++) {
+      for (let c = 0; c < this.cols; c++) {
+        if (dropKeys.includes(this.cells[r][c])) {
+          this.cells[r][c] = repKey;
+        }
+      }
+    }
+    // Drop the merged keys from WOOL
+    const next = {};
+    for (const [k, v] of Object.entries(WOOL)) {
+      if (!dropKeys.includes(k)) next[k] = v;
+    }
+    setActivePalette(next);
+    this.actionSelectedKeys.clear();
+    this._buildPalette();
+    this.render();
+    this.updateBobbinPreview();
+    flashEditorMessage(`${dropKeys.length}색 → ${repKey}로 통합 완료`);
+  },
+
+  _deleteSelectedPaletteColors() {
+    if (!this.actionSelectedKeys || this.actionSelectedKeys.size === 0) return;
+    const dropKeys = [...this.actionSelectedKeys].filter(k => k in WOOL);
+    if (dropKeys.length === 0) return;
+    // Clear cells with those colors
+    let cleared = 0;
+    for (let r = 0; r < this.rows; r++) {
+      for (let c = 0; c < this.cols; c++) {
+        if (dropKeys.includes(this.cells[r][c])) {
+          this.cells[r][c] = null;
+          cleared++;
+        }
+      }
+    }
+    // Drop from WOOL
+    const next = {};
+    for (const [k, v] of Object.entries(WOOL)) {
+      if (!dropKeys.includes(k)) next[k] = v;
+    }
+    setActivePalette(next);
+    this.actionSelectedKeys.clear();
+    this._buildPalette();
+    this.render();
+    this.updateBobbinPreview();
+    flashEditorMessage(`${dropKeys.length}색 삭제 (${cleared}셀 비움)`);
   },
 
   _sizeCanvas() {
