@@ -5669,29 +5669,15 @@ const MapTool = {
         i.onerror = rej;
         i.src = url;
       });
-      // Pick a grid size that preserves the image's native resolution as closely as possible.
-      // - If image fits in [MIN_GRID, MAX_GRID]^2 → use native dimensions 1:1
-      // - If larger → scale down preserving aspect ratio, longest side = MAX_GRID
-      // - If smaller in one dimension → bump that side up to MIN_GRID
-      const MIN_GRID = 16, MAX_GRID = 64;
-      let cols, rows;
-      const longest = Math.max(img.width, img.height);
-      if (longest > MAX_GRID) {
-        const k = MAX_GRID / longest;
-        cols = Math.max(MIN_GRID, Math.round(img.width  * k));
-        rows = Math.max(MIN_GRID, Math.round(img.height * k));
-      } else {
-        cols = Math.max(MIN_GRID, img.width);
-        rows = Math.max(MIN_GRID, img.height);
-      }
-      // Apply the new grid size
-      this.cols = cols; this.rows = rows;
+      // KEEP the user's current grid size — the image is downsampled to
+      // fit. Lets the user pre-set the grid (e.g., 24×24), paste, and
+      // get a smaller pixel-art mosaic. In-game, Layout.cellSize is
+      // computed inversely from the pattern bbox so a smaller grid
+      // automatically renders with BIGGER cells (each cell takes more
+      // screen space). No extra in-game code needed.
+      const cols = this.cols;
+      const rows = this.rows;
       this.cells = Array.from({ length: rows }, () => Array(cols).fill(null));
-      // Update sliders
-      const csEl = document.getElementById('map-cols');
-      const rsEl = document.getElementById('map-rows');
-      if (csEl) { csEl.value = cols; csEl.parentElement.querySelector('.val').textContent = cols; }
-      if (rsEl) { rsEl.value = rows; rsEl.parentElement.querySelector('.val').textContent = rows; }
       this._sizeCanvas();
 
       // Draw image into temp canvas at cols×rows. Use 1:1 if it fits exactly, else fit-to-shortest.
