@@ -311,9 +311,9 @@
 <script src="https://cdn.jsdelivr.net/npm/three@0.137.5/examples/js/loaders/GLTFLoader.js"></script>
 <!-- DRACOLoader: required for Draco-compressed GLBs (e.g. model_optimized.glb). -->
 <script src="https://cdn.jsdelivr.net/npm/three@0.137.5/examples/js/loaders/DRACOLoader.js"></script>
-<!-- Chunky cartoon font for bobbin counts + "5/5" counter (matches reference). -->
+<!-- Chunky block font for bobbin counts + "5/5" counter (matches reference). -->
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Luckiest+Guy&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Lilita+One&display=swap">
 </head>
 <body>
 <div id="overlay"><div class="banner" id="banner"></div></div>
@@ -1673,7 +1673,7 @@ class Bobbin {
     // Sits directly on the bobbin's top face (centered) per reference.
     this.badgeGroup = new PIXI.Container();
     this.label = new PIXI.Text(String(count), {
-      fontFamily: '"Luckiest Guy", "Arial Black", "Helvetica Neue", sans-serif',
+      fontFamily: '"Lilita One", "Arial Black", "Helvetica Neue", sans-serif',
       fontSize: Math.round(Layout.bobbinSize * 0.55),
       fontWeight: '900',
       fill: 0xffffff,
@@ -2536,13 +2536,13 @@ async function boot() {
   // isn't there.
   await loadEditorTuneFromFile();
 
-  // Wait for the Luckiest Guy webfont so the very first PIXI.Text glyph
+  // Wait for the Lilita One webfont so the very first PIXI.Text glyph
   // caches use it (PIXI snapshots glyph metrics at construction time).
   // 1.2s cap so a slow CDN can never block the whole boot.
   if (document.fonts?.load) {
     try {
       await Promise.race([
-        document.fonts.load('900 32px "Luckiest Guy"'),
+        document.fonts.load('900 32px "Lilita One"'),
         new Promise(r => setTimeout(r, 1200)),
       ]);
     } catch (_) { /* fall through to fallback fonts */ }
@@ -3195,7 +3195,7 @@ function buildCounter() {
   Game.counterContainer.y = Layout.counter.y;
 
   const t = new PIXI.Text(`${Game.dumpCount}/${GameTune.carrier.total}`, {
-    fontFamily: '"Luckiest Guy", "Arial Black", "Helvetica Neue", sans-serif',
+    fontFamily: '"Lilita One", "Arial Black", "Helvetica Neue", sans-serif',
     fontSize: EditorTune.counterFontSize,
     fontWeight: '800',
     fill: 0xffffff,
@@ -3296,10 +3296,15 @@ function pickQueueColumnForNewEntry() {
 
 /* Pick the next deck index to dispense, weighted toward colors currently pullable.
  * Selection only considers the FRONT WINDOW of the deck so we don't reorder the
- * whole sequence — just gently prefer useful colors over the next few entries.
- * Weight: pullable=PULLABLE_WEIGHT, others=1. */
-const QUEUE_WEIGHT_PULLABLE = 2.5;   // mild bias, not overwhelming
-const QUEUE_WEIGHT_WINDOW   = 4;     // look at next 4 entries when refilling
+ * whole sequence — just prefer useful colors over the next few entries.
+ * Weight: pullable=PULLABLE_WEIGHT, others=1.
+ *
+ * With dynamic palettes (up to ~30 colors), the previous 2.5× bias was too
+ * mild — non-pullable bobbins filled the queue + slots and forced game-over.
+ * Bumped to 8× with a wider lookahead window so the front of the queue
+ * actually leans heavily on currently-useful colors. */
+const QUEUE_WEIGHT_PULLABLE = 8;     // strong bias toward pullable colors
+const QUEUE_WEIGHT_WINDOW   = 8;     // wider lookahead when refilling
 function pickWeightedDeckIndex() {
   if (Game.deck.length === 0) return -1;
   if (Game.deck.length === 1) return 0;
