@@ -1495,9 +1495,10 @@ class WoolGrid {
         const pos = Layout.cellCenter(r, c);
         const node = new PIXI.Container();
         node.x = pos.x; node.y = pos.y;
-        if (color) {
+        if (color && WOOL[color]) {
           // Solid square underlay — fills cellSize exactly so adjacent cells
           // touch with zero gaps regardless of the sprite's alpha falloff.
+          // Guarded against missing WOOL[color] (palette edit mid-game).
           const base = new PIXI.Graphics();
           base.beginFill(WOOL[color].fill);
           // 1.02 to hide sub-pixel rounding seams between cells.
@@ -1649,17 +1650,21 @@ class Bobbin {
 
     // Sprite-based bobbin: pre-rendered 3D stages (0..10 wool rings).
     // Two orientations: UPRIGHT (queue/slot) and LYING (rail).
+    // Tint defensively: if the bobbin's color key was removed from WOOL
+    // (e.g., user edited the palette mid-game), fall back to gray so
+    // the bobbin renders instead of crashing the Bobbin constructor.
+    const woolFill = WOOL[color]?.fill ?? 0x808080;
     if (Game.tex?.bobbinStagesUpright) {
       this.orientation = 'upright';  // current orientation
       this.sprite = new PIXI.Sprite(Game.tex.bobbinStagesUpright[0]);
       this.sprite.anchor.set(0.5);
-      this.sprite.tint = WOOL[color].fill;
+      this.sprite.tint = woolFill;
       this.spin.addChild(this.sprite);
     } else if (Game.tex?.bobbinStages) {
       this.orientation = 'lying';
       this.sprite = new PIXI.Sprite(Game.tex.bobbinStages[0]);
       this.sprite.anchor.set(0.5);
-      this.sprite.tint = WOOL[color].fill;
+      this.sprite.tint = woolFill;
       this.spin.addChild(this.sprite);
     } else {
       this.orientation = 'upright';
@@ -3329,6 +3334,11 @@ function refillQueue(skipAnim = false) {
   while (Game.queue.length < QUEUE_VISIBLE_MAX && Game.deck.length > 0) {
     const idx = pickWeightedDeckIndex();
     const [spec] = Game.deck.splice(idx, 1);
+    // Skip deck entries whose color was removed from WOOL (e.g., user
+    // edited the palette mid-game). Without this guard a single bad
+    // spec would crash the entire refill loop and leave queue listeners
+    // stale — the symptom the user hit ("2nd-row clicks don't launch").
+    if (!WOOL[spec.color]) continue;
     const b = new Bobbin(spec.color, spec.count);
     const col = pickQueueColumnForNewEntry();
     const entry = { bobbin: b, col };
