@@ -3082,23 +3082,32 @@ function redrawDump() {
 function takeFrontTrayFromDump() {
   ensureTrayStack();
   // pop() takes the LAST element (highest slotIndex) — that's the
-  // rightmost tray, which is also at the top of the dump z-order
-  // after the redrawDump iteration was flipped. The user expects the
-  // visually-topmost tray to be the one that launches.
+  // rightmost tray, which is also at the top of the dump z-order.
   const carrier = Game.trayStack.pop();
   if (!carrier) return null;
-  const worldX = Layout.dump.x + carrier.gfx.x;
-  const worldY = Layout.dump.y + carrier.gfx.y;
-  if (carrier.gfx.parent) carrier.gfx.parent.removeChild(carrier.gfx);
+  // Compute the carrier's WORLD position + rotation BEFORE re-parenting.
+  // Game.dumpGfx may have its own rotation (trayStackRotationDeg) and
+  // each carrier inside has its own local rotation/position. Without
+  // this math the tray pops out of the pile and visibly snaps to a
+  // different angle in Game.layers.carrier (which has no rotation).
+  const parent = carrier.gfx.parent;
+  const θ = parent ? (parent.rotation || 0) : 0;
+  const px = parent ? (parent.x || 0) : 0;
+  const py = parent ? (parent.y || 0) : 0;
+  const lx = carrier.gfx.x;
+  const ly = carrier.gfx.y;
+  const rotX = lx * Math.cos(θ) - ly * Math.sin(θ);
+  const rotY = lx * Math.sin(θ) + ly * Math.cos(θ);
+  const worldX = px + rotX;
+  const worldY = py + rotY;
+  const worldRot = θ + carrier.gfx.rotation;
+  if (parent) parent.removeChild(carrier.gfx);
   Game.layers.carrier.addChild(carrier.gfx);
   carrier.gfx.x = worldX;
   carrier.gfx.y = worldY;
+  carrier.gfx.rotation = worldRot;
   carrier.gfx.alpha = 1;
   carrier.gfx.scale.set(1);
-  // Dump trays and rail trays share the SAME visual orientation — the
-  // reference shows flat horizontal plates stacked vertically, sliding
-  // to the rail without any rotation. So both states use the 'lying'
-  // sprite; no orientation change happens during the launch.
   carrier.setOrientation?.('lying', true);
   return carrier;
 }
@@ -3370,10 +3379,14 @@ function launchBobbin(bobbin) {
   // ~0.04 puts the landed bobbin clear of the brush sprite.
   const landingT = clamp(EditorTune.launchEndT ?? 0.05, 0, 0.95);
   const startPos = RailPath.position(landingT);
-  // Final rail rotation = trayLaunchedRotationDeg only (no pos.angle).
-  // Matches the simplified tickRail behaviour so the slide doesn't
-  // overshoot the rail tray's actual rotation.
-  const finalTrayRot = deg2rad(EditorTune.trayLaunchedRotationDeg);
+  // Final rail rotation = dump stack rotation + launchedRot, matching
+  // the WORLD rotation a tray has when sitting in the dump pile.
+  // Currently the in-flight code holds rotation constant so this is
+  // only used as a reference for any future rotation interpolation.
+  const finalTrayRot = deg2rad(
+    (EditorTune.trayStackRotationDeg || 0) +
+    (EditorTune.trayLaunchedRotationDeg || 0)
+  );
   const carrier = takeFrontTrayFromDump();
   if (!carrier) return;
   addToDumpCount(-1);
@@ -3506,12 +3519,15 @@ function tickRail(dt) {
     const pos = RailPath.position(e.t);
     e.carrier.gfx.x = pos.x;
     e.carrier.gfx.y = pos.y;
-    // Rail tray rotation = trayLaunchedRotationDeg ONLY (no pos.angle).
-    // The user wants the rail tray to stay at the same visual angle as
-    // the dump tray throughout its loop, so we don't add the rail
-    // tangent. Setting trayLaunchedRotationDeg = trayDumpRotationDeg
-    // makes dump and rail look visually identical.
-    e.carrier.gfx.rotation = deg2rad(EditorTune.trayLaunchedRotationDeg);
+    // Rail tray rotation matches the DUMP tray's WORLD rotation
+    // = trayStackRotationDeg (dump container) + trayLaunchedRotationDeg
+    // (carrier local). With trayLaunchedRotationDeg = trayDumpRotationDeg
+    // this equals the dump tray's on-screen angle exactly. No pos.angle
+    // term — rail tray stays at fixed orientation as it travels.
+    e.carrier.gfx.rotation = deg2rad(
+      (EditorTune.trayStackRotationDeg || 0) +
+      (EditorTune.trayLaunchedRotationDeg || 0)
+    );
     e.bobbin.gfx.x = pos.x;
     e.bobbin.gfx.y = pos.y + (EditorTune.bobbinOnTrayOffsetY || 0);
     // Bobbin follows the carrier direction (+ optional tuneable offset)
