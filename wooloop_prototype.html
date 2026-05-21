@@ -2560,12 +2560,11 @@ async function boot() {
     Game.tex.bobbinStagesUpright = tex3D.bobbinStagesUpright;
     Game.tex.tray = tex3D.tray;
     Game.tex.trayUpright = tex3D.trayUpright;
-    // Reference shows STANDING trays in both dump and rail states (no
-    // vertical→horizontal pose change during launch). Alias trayLying to
-    // the upright bake so the carrier's lying sprite renders the same
-    // vertical drum — sliding from dump to rail leaves the orientation
-    // unchanged, matching the reference exactly.
-    Game.tex.trayLying = tex3D.trayUpright;
+    // Dump and rail use DIFFERENT textures now (per user's pick: dump
+    // = #3 + Y rotation 90; rail = #10 / X=-30 + 2D Z 90). The lying
+    // texture is baked with its own rotation params (trayTiltDeg /
+    // trayYRotationDeg) so it can look different from the upright bake.
+    Game.tex.trayLying = tex3D.trayLying;
     Game.tex.trayDump = tex3D.trayUpright;
   } catch (e) {
     console.warn('3D pre-render failed, falling back to procedural', e);
@@ -3108,14 +3107,14 @@ function layoutDumpTray(carrier, slotIndex) {
   const off = slotIndex * s * isoSpacing;
   carrier.gfx.alpha = 1;
   carrier.gfx.scale.set(1);
-  // Per-tray Z rotation. Each tray spins around its own center by the
-  // SAME angle (all 5 trays share the value via the shared key). This
-  // is separate from trayStackRotationDeg (whole-pile turntable spin,
-  // applied to Game.dumpGfx). Together they give independent control.
+  // Per-tray 2D Z rotation = user's trayDumpRotationDeg knob.
   carrier.gfx.rotation = deg2rad(EditorTune.trayDumpRotationDeg || 0);
   carrier.gfx.x = off * 0.35;  // slight rightward drift per back tray
   carrier.gfx.y = -off;        // up (back tray peeks above front)
-  carrier.setOrientation?.('lying', true);
+  // Dump trays use the UPRIGHT sprite (trayUpright texture, baked with
+  // trayIdleXRotationDeg/YRotationDeg/ZRotationDeg3D). Rail trays use
+  // the lying sprite (different bake) — see spawnRailEntry / tickRail.
+  carrier.setOrientation?.('upright', true);
 }
 
 function redrawDump() {
@@ -3164,7 +3163,10 @@ function takeFrontTrayFromDump() {
   carrier.gfx.rotation = worldRot;
   carrier.gfx.alpha = 1;
   carrier.gfx.scale.set(1);
-  carrier.setOrientation?.('lying', true);
+  // Carrier leaves the dump in UPRIGHT sprite mode (same as the stack).
+  // tickInFlight will crossfade it to LYING as the launch progresses so
+  // the tray arrives at the rail with the lying texture.
+  carrier.setOrientation?.('upright', true);
   return carrier;
 }
 
@@ -3173,10 +3175,8 @@ function putTrayBackToDump(carrier) {
   if (carrier.gfx.parent) carrier.gfx.parent.removeChild(carrier.gfx);
   carrier.gfx.alpha = 1;
   carrier.gfx.scale.set(1);
-  // Carrier stays in 'lying' orientation — see layoutDumpTray. Stack and
-  // rail trays share the same sprite, so no orientation change is needed
-  // when slotting back into the stack.
-  carrier.setOrientation?.('lying', true);
+  // Match layoutDumpTray's upright orientation when restored to the pile.
+  carrier.setOrientation?.('upright', true);
   Game.trayStack.push(carrier);
   addToDumpCount(+1);
   updateCounter();
@@ -4042,13 +4042,23 @@ function tickInFlight(dt) {
       f.t += dt;
       const u = clamp(f.t / f.duration, 0, 1);
       const sp = f.railStart || RailPath.position(f.landingT ?? 0);
-      // Straight slide, no rotation change. User confirmed they don't
-      // want a separate rail-rotation — the tray keeps its dump angle
-      // and just slides to the rail entry. Rail rotation = dump rotation.
+      // Position lerp: dump origin → rail entry.
       const posU = phaseEase(u, 0.10, 0.95);
       f.carrier.gfx.x = lerp(f.fromCarrierPos.x, sp.x, posU);
       f.carrier.gfx.y = lerp(f.fromCarrierPos.y, sp.y, posU);
-      f.carrier.gfx.rotation = f.fromCarrierRot ?? 0;
+      // Rotation lerp: dump 2D rotation → rail 2D rotation (which now
+      // includes the rail tangent angle at the landing point).
+      const finalRot = sp.angle + deg2rad(
+        (EditorTune.trayStackRotationDeg || 0) +
+        (EditorTune.trayLaunchedRotationDeg || 0)
+      );
+      f.carrier.gfx.rotation = lerpAngle(f.fromCarrierRot ?? 0, finalRot, posU);
+      // Orientation crossfade: upright sprite (dump texture) → lying
+      // sprite (rail texture). Drives mid-slide so the visual transition
+      // overlaps with the position slide.
+      if (f.carrier.applyFade) {
+        f.carrier.applyFade('upright', 'lying', phaseEase(u, 0.20, 0.85));
+      }
 
       if (!f.bobbinLaid && u > 0.48) {
         f.bobbinLaid = true;
@@ -5730,10 +5740,24 @@ const MapTool = {
     this.cols = cols;
     this.rows = rows;
     const next = Array.from({ length: rows }, () => Array(cols).fill(null));
-    // Copy what we can (top-left aligned)
-    for (let r = 0; r < Math.min(rows, oldR); r++) {
-      for (let c = 0; c < Math.min(cols, oldC); c++) {
-        next[r][c] = old[r][c];
+    // CENTER-anchored copy. When the grid shrinks, both sides crop
+    // evenly so a pasted image stays centered. When it grows, the old
+    // grid is centered in the new (extra cells are null/empty).
+    //   srcX = floor((oldC - cols)/2) when shrinking (positive),
+    //        = floor((oldC - cols)/2) negative when growing — we
+    //          read the OPPOSITE side from negative-padding-aware loop.
+    // Cleaner formulation: copy index range [maxStart .. min(cols, oldC)]
+    // where srcStart and dstStart are computed once based on whether
+    // each dimension is shrinking or growing.
+    const dstStartX = Math.max(0, Math.floor((cols - oldC) / 2));
+    const dstStartY = Math.max(0, Math.floor((rows - oldR) / 2));
+    const srcStartX = Math.max(0, Math.floor((oldC - cols) / 2));
+    const srcStartY = Math.max(0, Math.floor((oldR - rows) / 2));
+    const copyW = Math.min(cols, oldC);
+    const copyH = Math.min(rows, oldR);
+    for (let r = 0; r < copyH; r++) {
+      for (let c = 0; c < copyW; c++) {
+        next[dstStartY + r][dstStartX + c] = old[srcStartY + r][srcStartX + c];
       }
     }
     this.cells = next;
@@ -6036,7 +6060,7 @@ async function replaceGLBAsset(targetKey, file) {
     Game.tex.tray = newLying;
     Game.tex.trayLying = newLying;
     Game.tex.trayUpright = newUpright;
-    Game.tex.trayDump = newLying;
+    Game.tex.trayDump = newUpright;
     for (const e of Game.rail) {
       e.carrier?.refreshTextures?.();
       e.carrier?.setOrientation?.('lying', true);
@@ -6413,17 +6437,14 @@ function reRenderTrayY(yDeg, tiltDeg, idleYDeg = EditorTune.trayIdleYRotationDeg
       const target = _reRenderTrayPending;
       _reRenderTrayPending = null;
       const newUpright = await Three3D.renderTrayAt(target.idleYDeg, 0, 'upright');
-      // Reference: standing-drum look in BOTH dump AND rail. Skip the
-      // lying re-render entirely and alias trayLying/trayDump to the
-      // upright bake so the visible sprite (carriers' lying child)
-      // reflects the user's per-tray X/Y/Z3D rotation changes. Before
-      // this fix, reRenderTrayY would assign trayLying to a separate
-      // lying render that ignores trayIdleXRotationDeg — making X
-      // appear broken (and Y only "work" once on the first change,
-      // by the side-effect of switching to a different texture).
+      // Dump and rail use DIFFERENT textures: upright bake uses
+      // trayIdle* rotations, lying bake uses trayTiltDeg/trayYRotationDeg.
+      // Re-bake both so editor edits to either branch's rotation keys
+      // propagate to the visible carriers.
+      const newLying = await Three3D.renderTrayAt(target.yDeg, target.tiltDeg, 'lying');
       Game.tex.trayUpright = newUpright;
-      Game.tex.tray = newUpright;
-      Game.tex.trayLying = newUpright;
+      Game.tex.tray = newLying;
+      Game.tex.trayLying = newLying;
       Game.tex.trayDump = newUpright;
       for (const e of Game.rail) {
         if (e.carrier?.refreshTextures) e.carrier.refreshTextures();
