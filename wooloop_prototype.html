@@ -3422,11 +3422,10 @@ function launchBobbin(bobbin) {
   // ~0.04 puts the landed bobbin clear of the brush sprite.
   const landingT = clamp(EditorTune.launchEndT ?? 0.05, 0, 0.95);
   const startPos = RailPath.position(landingT);
-  // Final rail rotation = dump stack rotation + launchedRot, matching
-  // the WORLD rotation a tray has when sitting in the dump pile.
-  // Currently the in-flight code holds rotation constant so this is
-  // only used as a reference for any future rotation interpolation.
-  const finalTrayRot = deg2rad(
+  // Final rail rotation = rail tangent at landing point + dump baseline.
+  // Matches the new tickRail formula so the slide arrives at the same
+  // angle the rail will hold from that point onward.
+  const finalTrayRot = startPos.angle + deg2rad(
     (EditorTune.trayStackRotationDeg || 0) +
     (EditorTune.trayLaunchedRotationDeg || 0)
   );
@@ -3562,12 +3561,12 @@ function tickRail(dt) {
     const pos = RailPath.position(e.t);
     e.carrier.gfx.x = pos.x;
     e.carrier.gfx.y = pos.y;
-    // Rail tray rotation matches the DUMP tray's WORLD rotation
-    // = trayStackRotationDeg (dump container) + trayLaunchedRotationDeg
-    // (carrier local). With trayLaunchedRotationDeg = trayDumpRotationDeg
-    // this equals the dump tray's on-screen angle exactly. No pos.angle
-    // term — rail tray stays at fixed orientation as it travels.
-    e.carrier.gfx.rotation = deg2rad(
+    // Rail tray rotation now follows the rail tangent (pos.angle) so the
+    // tray visually "points along the track" as it travels. The dump
+    // baseline (stackRot + launchedRot) is added on top so the tray's
+    // base orientation matches the dump pile at rail-bottom (pos.angle=0)
+    // and rotates from there.
+    e.carrier.gfx.rotation = pos.angle + deg2rad(
       (EditorTune.trayStackRotationDeg || 0) +
       (EditorTune.trayLaunchedRotationDeg || 0)
     );
