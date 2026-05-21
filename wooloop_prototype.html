@@ -3005,28 +3005,29 @@ function ensureTrayStack() {
 
 function layoutDumpTray(carrier, slotIndex) {
   const s = Layout.bobbinSize * EditorTune.trayIdleScale;
-  // Reference: 5 vertical STANDING trays lined up in a ROW (horizontal
-  // arrangement, side by side), not a vertical column. Each next tray
-  // sits to the RIGHT of the previous one, with slight overlap so the
-  // row reads as a compact stack rather than 5 separate objects. Base
-  // multiplier 0.40 ≈ 40% of tray-width per slot, so adjacent trays
-  // overlap by ~60% (matches the reference's tight side-by-side stack).
-  // trayStackSpacing keeps its multiplier role: user's saved 0.56 now
-  // controls how spread out the row is.
-  const rowSpacing = 0.40 * (EditorTune.trayStackSpacing ?? 1.0);
-  const offX = slotIndex * s * rowSpacing;
+  // Reference layout: 5 vertical STANDING trays nested in a tight pile.
+  // Front tray (slot 0) is fully visible; back trays peek their TOPS out
+  // above the front tray, creating a "stack of plates" silhouette like
+  // the reference. Per-slot offset: small Y-up (back tray peeks ~6 px
+  // above) + tiny X-right (slight isometric drift). Not a horizontal
+  // row (trays don't sit side-by-side) and not a tall column (offsets
+  // are small enough that the pile reads as one chunky stack).
+  //
+  // Tuned to match the reference's proportions: at user's saved
+  // trayStackSpacing=0.56 and bobbinSize×trayIdleScale ≈ 40 px tray
+  // size, base 0.30 gives ~7 px Y peek per slot — exactly the band
+  // width visible in the reference's back-tray tops.
+  const isoSpacing = 0.30 * (EditorTune.trayStackSpacing ?? 1.0);
+  const off = slotIndex * s * isoSpacing;
   carrier.gfx.alpha = 1;
   carrier.gfx.scale.set(1);
   // No 2D rotation — the standing-drum look comes entirely from the 3D
-  // bake (trayUpright texture). slotIndex=0 is the FRONTMOST tray (the
-  // one that launches first); higher indices stack behind to the right.
+  // bake (trayUpright texture). slotIndex=0 is the FRONTMOST tray;
+  // higher slotIndex = further back in the pile (drawn earlier in
+  // redrawDump so it sits visually behind).
   carrier.gfx.rotation = 0;
-  carrier.gfx.x = offX;
-  carrier.gfx.y = 0;
-  // Both states (dump + rail) use the same vertical-drum texture. See the
-  // trayLying = trayUpright alias in boot. setOrientation('lying') keeps
-  // the carrier's lying sprite visible — which is the same texture as
-  // upright now.
+  carrier.gfx.x = off * 0.35;  // slight rightward drift per back tray
+  carrier.gfx.y = -off;        // up (back tray peeks above front)
   carrier.setOrientation?.('lying', true);
 }
 
@@ -3887,12 +3888,12 @@ function returnCarrierToDump(carrier, duration) {
   const sr = carrier.gfx.rotation;
   const returnSlot = Game.trayStack?.length ?? Game.dumpCount;
   const s = Layout.bobbinSize * EditorTune.trayIdleScale;
-  // Mirror layoutDumpTray exactly: trays line up in a row along X, no Y
-  // offset. Returning carrier lands at the next open slot in the row.
-  const rowSpacing = 0.40 * (EditorTune.trayStackSpacing ?? 1.0);
-  const off = returnSlot * s * rowSpacing;
-  const tx = Layout.dump.x + off;
-  const ty = Layout.dump.y;
+  // Mirror layoutDumpTray exactly: isometric stagger so the returning
+  // carrier lands at the next open slot in the nested pile.
+  const isoSpacing = 0.30 * (EditorTune.trayStackSpacing ?? 1.0);
+  const off = returnSlot * s * isoSpacing;
+  const tx = Layout.dump.x + off * 0.35;
+  const ty = Layout.dump.y - off;
   carrier.gfx.alpha = 1;
   carrier.gfx.scale.set(1);
   if (carrier.upright) carrier.upright.rotation = 0;
