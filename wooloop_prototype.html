@@ -4286,8 +4286,14 @@ const EditorTool = {
         file = res.ok;
       } catch (_) { /* no server */ }
 
-      if (file)       flashEditorMessage('저장됨 ✓ (파일 + localStorage)');
-      else if (local) flashEditorMessage('저장됨 ✓ (localStorage only)');
+      // Include the saved counter offset in the confirmation so users can
+      // visually verify the counter position made it into the save (user
+      // reported confusion about this).
+      const cx = Math.round(EditorTune.counterOffsetX);
+      const cy = Math.round(EditorTune.counterOffsetY);
+      const tag = `· 카운터 offset(${cx}, ${cy})`;
+      if (file)       flashEditorMessage(`저장됨 ✓ (파일 + localStorage) ${tag}`);
+      else if (local) flashEditorMessage(`저장됨 ✓ (localStorage only) ${tag}`);
     });
     document.getElementById('ed-reset').addEventListener('click', () => {
       if (!confirm('모든 값을 기본값으로 되돌립니다. 진행할까요?')) return;
