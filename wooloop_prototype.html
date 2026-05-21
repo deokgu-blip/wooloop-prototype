@@ -3971,29 +3971,33 @@ function tickInFlight(dt) {
       f.t += dt;
       const u = clamp(f.t / f.duration, 0, 1);
       const sp = f.railStart || RailPath.position(f.landingT ?? 0);
-      // STRAIGHT slide from the carrier's start position to the rail entry.
-      // Direct lerp on position (no Bezier).
-      const trayU = phaseEase(u, 0.10, 0.95);
-      f.carrier.gfx.x = lerp(f.fromCarrierPos.x, sp.x, trayU);
-      f.carrier.gfx.y = lerp(f.fromCarrierPos.y, sp.y, trayU);
-      // Rotation INTERPOLATES from dump angle (fromCarrierRot, captured
-      // at takeFrontTrayFromDump) to rail angle (finalTrayRot). User's
-      // reference shows the tray tipping over from vertical to lying
-      // during the slide — so we lerp instead of pinning to a constant.
+      // PIVOT-THEN-SLIDE animation. User asked: "real-life pushing a
+      // standing tray forward — it tips over, then slides."
+      // - ROTATION phase-ease at the START (u 0.00 → 0.45) so the tray
+      //   tips from vertical to lying during the first ~half of the
+      //   animation while it's barely moved.
+      // - POSITION phase-ease at the END (u 0.35 → 1.0) so the tray
+      //   stays at the dump while it's tipping, then slides to the rail
+      //   AFTER it's lying flat.
+      // The phases overlap a little (0.35 → 0.45) so the tip finishes
+      // just as the slide starts — no awkward pause.
+      const rotU = phaseEase(u, 0.00, 0.45);
+      const posU = phaseEase(u, 0.35, 1.00);
+      f.carrier.gfx.x = lerp(f.fromCarrierPos.x, sp.x, posU);
+      f.carrier.gfx.y = lerp(f.fromCarrierPos.y, sp.y, posU);
       const finalRot = deg2rad(EditorTune.trayLaunchedRotationDeg);
-      f.carrier.gfx.rotation = lerpAngle(f.fromCarrierRot ?? 0, finalRot, trayU);
+      f.carrier.gfx.rotation = lerpAngle(f.fromCarrierRot ?? 0, finalRot, rotU);
 
       if (!f.bobbinLaid && u > 0.48) {
         f.bobbinLaid = true;
         if (f.bobbin.setOrientation) f.bobbin.setOrientation('lying');
       }
-      // Bobbin: straight slide from queue position to landing point on top
-      // of the tray. Bobbin offset above the tray center stays as configured.
-      const bobbinU = phaseEase(u, 0.05, 0.95);
+      // Bobbin: travels alongside the tray, same posU easing so it
+      // lands on the tray at the moment the tray reaches the rail.
       const onTopY = (EditorTune.bobbinOnTrayOffsetY || 0);
-      f.bobbin.gfx.x = lerp(f.bobbinFrom.x, sp.x, bobbinU);
-      f.bobbin.gfx.y = lerp(f.bobbinFrom.y, sp.y + onTopY, bobbinU);
-      const bobbinRot = lerp(0, sp.angle + deg2rad(EditorTune.bobbinRailRotationDeg), phaseEase(u, 0.48, 0.95));
+      f.bobbin.gfx.x = lerp(f.bobbinFrom.x, sp.x, posU);
+      f.bobbin.gfx.y = lerp(f.bobbinFrom.y, sp.y + onTopY, posU);
+      const bobbinRot = lerp(0, deg2rad(EditorTune.bobbinRailRotationDeg), phaseEase(u, 0.48, 0.95));
       f.bobbin.gfx.rotation = bobbinRot;
       if (f.bobbin.badgeGroup) f.bobbin.badgeGroup.rotation = -bobbinRot;
       if (u >= 1) {
