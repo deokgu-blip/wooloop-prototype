@@ -3972,17 +3972,16 @@ function tickInFlight(dt) {
       const u = clamp(f.t / f.duration, 0, 1);
       const sp = f.railStart || RailPath.position(f.landingT ?? 0);
       // STRAIGHT slide from the carrier's start position to the rail entry.
-      // The old code did a quadratic Bezier through a via-point offset from
-      // the dump origin, which made the launched tray visibly drift BACKWARD
-      // (toward dump center) before going to the rail — looked broken,
-      // especially after the rightmost-tray-first change because the tray
-      // starts already offset from dump origin. Direct lerp = clean slide.
+      // Direct lerp on position (no Bezier).
       const trayU = phaseEase(u, 0.10, 0.95);
       f.carrier.gfx.x = lerp(f.fromCarrierPos.x, sp.x, trayU);
       f.carrier.gfx.y = lerp(f.fromCarrierPos.y, sp.y, trayU);
-      // Rotation stays constant — the tray slides at the SAME angle it had
-      // in the dump. User explicitly asked for no rotation during launch.
-      f.carrier.gfx.rotation = f.fromCarrierRot ?? 0;
+      // Rotation INTERPOLATES from dump angle (fromCarrierRot, captured
+      // at takeFrontTrayFromDump) to rail angle (finalTrayRot). User's
+      // reference shows the tray tipping over from vertical to lying
+      // during the slide — so we lerp instead of pinning to a constant.
+      const finalRot = deg2rad(EditorTune.trayLaunchedRotationDeg);
+      f.carrier.gfx.rotation = lerpAngle(f.fromCarrierRot ?? 0, finalRot, trayU);
 
       if (!f.bobbinLaid && u > 0.48) {
         f.bobbinLaid = true;
