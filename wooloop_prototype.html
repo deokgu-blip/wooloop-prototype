@@ -3971,22 +3971,13 @@ function tickInFlight(dt) {
       f.t += dt;
       const u = clamp(f.t / f.duration, 0, 1);
       const sp = f.railStart || RailPath.position(f.landingT ?? 0);
-      // PIVOT-THEN-SLIDE animation. User asked: "real-life pushing a
-      // standing tray forward — it tips over, then slides."
-      // - ROTATION phase-ease at the START (u 0.00 → 0.45) so the tray
-      //   tips from vertical to lying during the first ~half of the
-      //   animation while it's barely moved.
-      // - POSITION phase-ease at the END (u 0.35 → 1.0) so the tray
-      //   stays at the dump while it's tipping, then slides to the rail
-      //   AFTER it's lying flat.
-      // The phases overlap a little (0.35 → 0.45) so the tip finishes
-      // just as the slide starts — no awkward pause.
-      const rotU = phaseEase(u, 0.00, 0.45);
-      const posU = phaseEase(u, 0.35, 1.00);
+      // Straight slide, no rotation change. User confirmed they don't
+      // want a separate rail-rotation — the tray keeps its dump angle
+      // and just slides to the rail entry. Rail rotation = dump rotation.
+      const posU = phaseEase(u, 0.10, 0.95);
       f.carrier.gfx.x = lerp(f.fromCarrierPos.x, sp.x, posU);
       f.carrier.gfx.y = lerp(f.fromCarrierPos.y, sp.y, posU);
-      const finalRot = deg2rad(EditorTune.trayLaunchedRotationDeg);
-      f.carrier.gfx.rotation = lerpAngle(f.fromCarrierRot ?? 0, finalRot, rotU);
+      f.carrier.gfx.rotation = f.fromCarrierRot ?? 0;
 
       if (!f.bobbinLaid && u > 0.48) {
         f.bobbinLaid = true;
