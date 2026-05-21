@@ -6131,12 +6131,19 @@ function reRenderTrayY(yDeg, tiltDeg, idleYDeg = EditorTune.trayIdleYRotationDeg
     while (_reRenderTrayPending !== null) {
       const target = _reRenderTrayPending;
       _reRenderTrayPending = null;
-      const newLying = await Three3D.renderTrayAt(target.yDeg, target.tiltDeg, 'lying');
       const newUpright = await Three3D.renderTrayAt(target.idleYDeg, 0, 'upright');
-      Game.tex.tray = newLying;
-      Game.tex.trayLying = newLying;
+      // Reference: standing-drum look in BOTH dump AND rail. Skip the
+      // lying re-render entirely and alias trayLying/trayDump to the
+      // upright bake so the visible sprite (carriers' lying child)
+      // reflects the user's per-tray X/Y/Z3D rotation changes. Before
+      // this fix, reRenderTrayY would assign trayLying to a separate
+      // lying render that ignores trayIdleXRotationDeg — making X
+      // appear broken (and Y only "work" once on the first change,
+      // by the side-effect of switching to a different texture).
       Game.tex.trayUpright = newUpright;
-      Game.tex.trayDump = newLying;
+      Game.tex.tray = newUpright;
+      Game.tex.trayLying = newUpright;
+      Game.tex.trayDump = newUpright;
       for (const e of Game.rail) {
         if (e.carrier?.refreshTextures) e.carrier.refreshTextures();
         if (e.carrier?.setOrientation) e.carrier.setOrientation('lying', true);
