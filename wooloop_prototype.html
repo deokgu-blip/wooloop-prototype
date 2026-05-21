@@ -634,6 +634,14 @@ const EDITOR_DEFAULTS = {
   // Vertical gap multiplier between trays in the dump stack. 1.0 = baseline,
   // <1 brings them closer, >1 spreads them apart.
   trayStackSpacing: 0.56,
+  // WHOLE-STACK 2D rotation (degrees). Rotates the entire dump container
+  // — all 5 trays move together as a rigid group, the way you'd spin a
+  // tray of glasses on a turntable. This is SEPARATE from
+  // trayIdleXRotationDeg / trayIdleYRotationDeg / trayIdleZRotationDeg3D,
+  // which rotate EACH INDIVIDUAL tray's 3D model around its own center
+  // (and therefore re-bake the texture). Use stack rotation to tilt the
+  // pile angle without touching the per-tray pose.
+  trayStackRotationDeg: 0,
   // Bobbin shell tuning — multipliers on the procedural shell parts that
   // ride on top of the GLB model.
   //   bobbinBarrelR        : central column radius (also acts as inner wool
@@ -2373,16 +2381,13 @@ async function preRender3DAssets() {
     clearAddedMeshes();
     const trayGroup = new THREE.Group();
     if (orientation === 'upright') {
-      // The reference shows the dump trays as TRUE vertical drums —
-      // standing straight up with the white grip pad on top and blue
-      // body below. Hard-code rotation.x = 0 (override the saved
-      // trayIdleXRotationDeg) so the model isn't tilted back. The user
-      // explicitly asked to "fix the implementation, not adjust saved
-      // rotation values", and previous tunings of trayIdleXRotationDeg
-      // (e.g. 58°) were leftover from earlier experiments where the
-      // upright sprite was misused.
+      // Individual-tray 3D rotation: all three axes apply, all three
+      // are tunable from the editor. Bakes into the texture so all 5
+      // trays share the same pose (each tray rotates around its own
+      // center). Stack-wide rotation is a separate knob applied to
+      // the dump CONTAINER (see EditorTune.trayStackRotationDeg).
+      trayGroup.rotation.x = deg2rad(EditorTune.trayIdleXRotationDeg || 0);
       trayGroup.rotation.y = deg2rad(yDeg || 0);
-      trayGroup.rotation.x = 0;
       trayGroup.rotation.z = deg2rad(EditorTune.trayIdleZRotationDeg3D || 0);
     } else {
       // Lying-tray branch — leftover from earlier experiments where the
@@ -2981,6 +2986,10 @@ function drawDump() {
   const c = new PIXI.Container();
   c.x = Layout.dump.x;
   c.y = Layout.dump.y;
+  // WHOLE-STACK 2D rotation. Each tray inside still has its individual
+  // 3D pose baked into the texture; rotating the container here tilts
+  // the entire 5-tray pile as one rigid group (like a turntable).
+  c.rotation = deg2rad(EditorTune.trayStackRotationDeg || 0);
   Game.dumpGfx = c;
   Game.layers.ui.addChild(c);
   redrawDump();
@@ -5091,7 +5100,14 @@ function buildEditorAssetRegistry() {
         extra: [
           { key: 'trayDumpVisible',         label: '덤프에 표시 (0/1)',  step: 1,    min: 0,    max: 1, int: true },
           { key: 'trayThickness',           label: '트레이 굵기 (Z)',    step: 0.05, min: 0.1,  max: 4 },
-          { key: 'trayIdleZRotationDeg3D',  label: '3D Z 회전 (°)',      step: 0.5,  min: -180, max: 180 },
+          // PER-TRAY 3D rotation — bakes into texture, every tray in the
+          // stack shares the same pose (rotates around its OWN center).
+          // X axis lives on the rot gizmo above; Y/Z are listed here.
+          { key: 'trayIdleZRotationDeg3D',  label: '개별 3D Z 회전 (°)', step: 0.5,  min: -180, max: 180 },
+          // WHOLE-STACK 2D rotation — rotates Game.dumpGfx as a rigid
+          // group. Use this to tilt the entire 5-tray pile without
+          // changing per-tray pose. (Turntable-style spin.)
+          { key: 'trayStackRotationDeg',    label: '전체 스택 2D 회전 (°)', step: 0.5,  min: -180, max: 180 },
           { key: 'trayStackSpacing',        label: '트레이 간격',         step: 0.05, min: 0,    max: 4 },
           { key: 'launchEndT',              label: '발사 도착 t (0~1)',   step: 0.01, min: 0,    max: 0.5 },
           { key: 'bobbinOnTrayOffsetY',     label: '보빈-트레이 Y offset (px)', step: 1, min: -80, max: 80 },
@@ -5889,6 +5905,14 @@ function applyEditorChange(key) {
     case 'trayStackSpacing':
       // Just the dump visual — the rail trays aren't stacked.
       redrawDump();
+      break;
+    case 'trayStackRotationDeg':
+      // Rotate the whole dump container as a rigid group (turntable).
+      // Doesn't re-bake the texture or move individual trays — just
+      // spins the pile.
+      if (Game.dumpGfx) {
+        Game.dumpGfx.rotation = deg2rad(EditorTune.trayStackRotationDeg || 0);
+      }
       break;
     case 'bobbinBarrelR':
     case 'bobbinFlangeTopH':
