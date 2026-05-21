@@ -3370,7 +3370,10 @@ function launchBobbin(bobbin) {
   // ~0.04 puts the landed bobbin clear of the brush sprite.
   const landingT = clamp(EditorTune.launchEndT ?? 0.05, 0, 0.95);
   const startPos = RailPath.position(landingT);
-  const finalTrayRot = startPos.angle + deg2rad(EditorTune.trayLaunchedRotationDeg);
+  // Final rail rotation = trayLaunchedRotationDeg only (no pos.angle).
+  // Matches the simplified tickRail behaviour so the slide doesn't
+  // overshoot the rail tray's actual rotation.
+  const finalTrayRot = deg2rad(EditorTune.trayLaunchedRotationDeg);
   const carrier = takeFrontTrayFromDump();
   if (!carrier) return;
   addToDumpCount(-1);
@@ -3503,14 +3506,12 @@ function tickRail(dt) {
     const pos = RailPath.position(e.t);
     e.carrier.gfx.x = pos.x;
     e.carrier.gfx.y = pos.y;
-    // trayLaunchedRotationDeg is ALWAYS applied as a 2D screen-space rotation
-    // of the carrier sprite — it's how the user controls "which direction
-    // does the tray face on the rail" (e.g. 0 = long edge follows the rail,
-    // 90 = long edge perpendicular to the rail). trayRailFlat now only
-    // governs the 3D X-axis tilt baked into the texture; it doesn't lock
-    // the screen rotation. Previously the flat mode silenced this knob,
-    // which left the user with no rotation control at all.
-    e.carrier.gfx.rotation = pos.angle + deg2rad(EditorTune.trayLaunchedRotationDeg);
+    // Rail tray rotation = trayLaunchedRotationDeg ONLY (no pos.angle).
+    // The user wants the rail tray to stay at the same visual angle as
+    // the dump tray throughout its loop, so we don't add the rail
+    // tangent. Setting trayLaunchedRotationDeg = trayDumpRotationDeg
+    // makes dump and rail look visually identical.
+    e.carrier.gfx.rotation = deg2rad(EditorTune.trayLaunchedRotationDeg);
     e.bobbin.gfx.x = pos.x;
     e.bobbin.gfx.y = pos.y + (EditorTune.bobbinOnTrayOffsetY || 0);
     // Bobbin follows the carrier direction (+ optional tuneable offset)
